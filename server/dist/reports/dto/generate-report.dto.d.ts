@@ -1,0 +1,31 @@
+export declare const REPORT_PERIOD_MODES: readonly ["single", "range", "all"];
+export declare const REPORT_TYPES: readonly ["employee_detail", "summary", "excess_focus", "email_status", "sim_master"];
+export declare const REPORT_DATA_SOURCES: readonly ["invoices", "sim_master", "combined"];
+export declare const REPORT_COLUMNS: readonly ["month", "employee", "phone", "email", "department", "package", "invoice", "personal_usage", "excess", "overage", "remarks", "email_status"];
+export declare const REPORT_FILTERS: readonly ["positive_excess", "zero_excess", "negative_excess", "has_invoice", "email_sent", "email_pending"];
+export declare const REPORT_SORT: readonly ["name", "excess_desc", "invoice_desc", "month"];
+export type ReportPeriodMode = (typeof REPORT_PERIOD_MODES)[number];
+export type ReportType = (typeof REPORT_TYPES)[number];
+export type ReportDataSource = (typeof REPORT_DATA_SOURCES)[number];
+export type ReportColumn = (typeof REPORT_COLUMNS)[number];
+export type ReportFilter = (typeof REPORT_FILTERS)[number];
+export type ReportSort = (typeof REPORT_SORT)[number];
+export declare const REPORT_PACKAGE_AMOUNT_FIELDS: readonly ["packageValue", "totalAmount"];
+export type ReportPackageAmountField = (typeof REPORT_PACKAGE_AMOUNT_FIELDS)[number];
+export declare class GenerateReportDto {
+    periodMode: ReportPeriodMode;
+    month?: string;
+    monthFrom?: string;
+    monthTo?: string;
+    reportType?: ReportType;
+    dataSource?: ReportDataSource;
+    columns?: ReportColumn[];
+    filters?: ReportFilter[];
+    sortBy?: ReportSort;
+    includeSummary?: boolean;
+    customPrompt?: string;
+    title?: string;
+    maxPackageTotal?: number;
+    minPackageTotal?: number;
+    packageAmountField?: ReportPackageAmountField;
+}

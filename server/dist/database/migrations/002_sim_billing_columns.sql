@@ -1,0 +1,5 @@
+ALTER TABLE sim_employees
+  ADD COLUMN IF NOT EXISTS usage_amount NUMERIC(12, 2),
+  ADD COLUMN IF NOT EXISTS vat_amount NUMERIC(12, 2),
+  ADD COLUMN IF NOT EXISTS additional_amount NUMERIC(12, 2),
+  ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 2);

@@ -1,0 +1,29 @@
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+server/.env
+
+# Dependencies
+node_modules/
+scripts/node_modules/
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs & runtime
+*.log
+npm-debug.log*
+.pm2/
+
+# Local samples / uploads (optional — keep repo small)
+samples/
+*.pdf
+
+# Build caches (keep committed dist for this project’s deploy model)
+.cache/
+.turbo/

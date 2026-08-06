@@ -1,0 +1,1 @@
+{"version":3,"file":"send-approval-bulk.dto.js","sourceRoot":"","sources":["../../../src/invoice/dto/send-approval-bulk.dto.ts"],"names":[],"mappings":";;;;;;;;;;;;AAAA,qDAA6E;AAE7E,MAAa,mBAAmB;IAK9B,UAAU,CAAY;CACvB;AAND,kDAMC;AADC;IAJC,IAAA,yBAAO,GAAE;IACT,IAAA,8BAAY,EAAC,CAAC,CAAC;IACf,IAAA,8BAAY,EAAC,EAAE,CAAC;IAChB,IAAA,uBAAK,EAAC,EAAE,IAAI,EAAE,IAAI,EAAE,CAAC;;uDACA"}
