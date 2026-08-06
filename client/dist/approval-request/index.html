@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <title>eBilling | Approval Request</title>
+    <script>
+      (function () {
+        // Normalize /approval-request/ and /approval-request/<token> into the SPA path
+        // without bouncing through /ebilling (that causes a redirect loop on this host).
+        var host = location.hostname;
+        var base = host === "ebilling.neweast.cloud" ? "" : "/ebilling";
+        var parts = location.pathname.split("/").filter(Boolean);
+        if (parts[0] === "ebilling") parts.shift();
+        var idx = parts.indexOf("approval-request");
+        if (idx < 0) return;
+        var token =
+          idx >= 0 && parts[idx + 1] && parts[idx + 1].indexOf(".") === -1
+            ? parts[idx + 1]
+            : "";
+        var params = new URLSearchParams(location.search);
+        if (token && !params.get("token")) params.set("token", token);
+        var q = params.toString();
+        var desired =
+          base + "/approval-request" + (q ? "?" + q : "") + location.hash;
+        var current = location.pathname + location.search + location.hash;
+        if (current !== desired) {
+          history.replaceState(null, "", desired);
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-approval-v2.js?v=202607170045full-cache-purge"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-fLDltgH_.css?v=202607170045full-cache-purge">
+    <link rel="stylesheet" href="/assets/ebilling-shell.css?v=20">
+  </head>
+  <body>
+    <script>
+      (function () {
+        var p = new URLSearchParams(window.location.search);
+        var h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+        var u = p.get("uSrId");
+        var o = p.get("LoTp");
+        var c = p.get("co") || h.get("co");
+        var jwt = h.get("jwt") || p.get("jwt");
+        if (jwt && c) {
+          sessionStorage.setItem(
+            "eb_intranet_jwt",
+            JSON.stringify({ jwt: jwt, co: c }),
+          );
+        }
+        if (u && o && c) {
+          sessionStorage.setItem(
+            "eb_intranet_link",
+            JSON.stringify({ userId: u, otp: String(o), companyCode: c }),
+          );
+        }
+        if (c) {
+          try { localStorage.setItem("rectracking_co", c); } catch (e) {}
+        }
+      })();
+    </script>
+    <div id="root"></div>
+  </body>
+</html>

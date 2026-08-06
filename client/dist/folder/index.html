@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>eBilling | Bill Approval</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        min-height: 100vh;
+        color: #0f172a;
+      }
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 24px 16px 48px;
+      }
+      .card {
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+        overflow: hidden;
+      }
+      .head {
+        background: #0f172a;
+        color: #f8fafc;
+        padding: 24px;
+        text-align: center;
+      }
+      .head h1 { margin: 0 0 8px; font-size: 1.5rem; }
+      .head p { margin: 0; opacity: 0.85; }
+      .body { padding: 24px; }
+      .summary {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 20px;
+      }
+      .summary-title {
+        background: #f8fafc;
+        padding: 12px 16px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #64748b;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 16px;
+        border-top: 1px solid #f1f5f9;
+        font-size: 14px;
+      }
+      .row strong { font-weight: 700; }
+      .alert {
+        background: #fef2f2;
+        border-left: 4px solid #dc2626;
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        color: #7f1d1d;
+      }
+      .fields {
+        display: grid;
+        gap: 16px;
+        margin-top: 20px;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: #334155;
+      }
+      input {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-size: 16px;
+      }
+      input:focus {
+        outline: none;
+        border-color: #0f172a;
+        box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.12);
+      }
+      textarea {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-size: 15px;
+        font-family: inherit;
+        resize: vertical;
+        min-height: 88px;
+      }
+      textarea:focus {
+        outline: none;
+        border-color: #0f172a;
+        box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.12);
+      }
+      .hint {
+        font-size: 12px;
+        color: #64748b;
+        margin-top: 6px;
+      }
+      .actions {
+        margin-top: 24px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: none;
+        border-radius: 8px;
+        padding: 12px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .primary {
+        background: #0f172a;
+        color: #fff;
+        flex: 1;
+      }
+      .primary:disabled { opacity: 0.6; cursor: not-allowed; }
+      .status {
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        display: none;
+      }
+      .status.ok { display: block; background: #ecfdf5; color: #166534; }
+      .status.err { display: block; background: #fef2f2; color: #991b1b; }
+      .loading, .done {
+        text-align: center;
+        padding: 48px 24px;
+        color: #475569;
+      }
+      .split-note {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-size: 14px;
+        color: #1e3a8a;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card" id="app">
+        <div class="loading">Loading invoice details…</div>
+      </div>
+    </div>
+    <script>
+      function apiBase() {
+        if (window.location.hostname === 'ebilling.neweast.cloud') {
+          return window.location.origin + '/api';
+        }
+        if (window.location.hostname === 'mis.neweast.cloud') {
+          return window.location.origin + '/ebilling/api';
+        }
+        return 'http://' + window.location.hostname + ':5041';
+      }
+      function tokenFromPath() {
+        const parts = window.location.pathname.split('/').filter(Boolean);
+        const idx = parts.indexOf('folder');
+        if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+        return new URLSearchParams(window.location.search).get('token');
+      }
+      function money(v) {
+        return 'AED ' + Number(v || 0).toFixed(2);
+      }
+      function renderDone(message) {
+        document.getElementById('app').innerHTML = '<div class="done"><h2>Thank you</h2><p>' + message + '</p></div>';
+      }
+      function renderForm(data) {
+        const inv = data.invoice;
+        const exceeded = Number(inv.exceeded_amount || 0);
+        const canSubmit = data.canSubmit;
+        const app = document.getElementById('app');
+        app.innerHTML = `
+          <div class="head">
+            <h1>e& Bill Approval</h1>
+            <p>${inv.display_name || 'Employee'} · ${inv.month_label || inv.month}</p>
+          </div>
+          <div class="body">
+            <div class="summary">
+              <div class="summary-title">Bill Summary</div>
+              <div class="row"><span>Mobile number</span><strong>${inv.phone_number || '—'}</strong></div>
+              <div class="row"><span>Invoice reference</span><strong>${inv.invoice_code || '—'}</strong></div>
+              <div class="row"><span>Package allowance</span><strong>${money(inv.package_total)}</strong></div>
+              <div class="row"><span>Invoice total</span><strong>${money(inv.invoice_total)}</strong></div>
+              <div class="row"><span>Amount above package</span><strong style="color:#dc2626">${money(exceeded)}</strong></div>
+            </div>
+            ${data.alreadySubmitted ? `
+              <div class="alert" style="background:#ecfdf5;border-color:#16a34a;color:#166534;">
+                This bill was already approved.
+                ${inv.official_usage != null ? '<br/>Official: ' + money(inv.official_usage) + ' · Personal: ' + money(inv.personal_usage) : ''}
+                ${inv.employee_remarks ? '<br/><br/><strong>Your remarks:</strong> ' + inv.employee_remarks.replace(/</g, '&lt;') : ''}
+              </div>
+              ${!inv.employee_remarks ? `
+              <form id="remarksOnlyForm" class="fields" style="margin-top:1rem;">
+                <div>
+                  <label for="remarks">Add your remarks (optional)</label>
+                  <textarea id="remarks" name="remarks" maxlength="2000" placeholder="Add any notes about this bill split…"></textarea>
+                  <div class="hint">Your remarks will appear on your invoice record for HR review.</div>
+                </div>
+                <div class="actions">
+                  <button type="submit" class="primary" id="remarksOnlyBtn">Save remarks</button>
+                </div>
+                <div id="remarksStatus" class="status"></div>
+              </form>
+              ` : ''}
+            ` : exceeded > 0 ? `
+              <div class="alert">
+                Your bill exceeds the company package by <strong>${money(exceeded)}</strong>.
+                Please split this amount between official (company) and personal usage.
+              </div>
+              <div class="split-note">
+                <strong>Official</strong> = company business usage.<br/>
+                <strong>Personal</strong> = private usage and will be deducted from your salary.
+              </div>
+              <form id="approvalForm" class="fields">
+                <div>
+                  <label for="official">Official amount (AED)</label>
+                  <input id="official" name="official" type="number" min="0" step="0.01" value="${exceeded.toFixed(2)}" ${canSubmit ? '' : 'disabled'} />
+                </div>
+                <div>
+                  <label for="personal">Personal amount (AED)</label>
+                  <input id="personal" name="personal" type="number" min="0" step="0.01" value="0.00" ${canSubmit ? '' : 'disabled'} />
+                  <div class="hint">Official + Personal must equal ${money(exceeded)}</div>
+                </div>
+                <div>
+                  <label for="remarks">Your remarks (optional)</label>
+                  <textarea id="remarks" name="remarks" maxlength="2000" placeholder="Add any notes about this bill split (e.g. business travel, personal calls)…" ${canSubmit ? '' : 'disabled'}></textarea>
+                  <div class="hint">These remarks will appear on your invoice record for HR review.</div>
+                </div>
+                <div class="actions">
+                  <button type="submit" class="primary" id="submitBtn" ${canSubmit ? '' : 'disabled'}>Send excess to approve</button>
+                </div>
+                <div id="status" class="status"></div>
+              </form>
+            ` : `
+              <div class="alert" style="background:#ecfdf5;border-color:#16a34a;color:#166534;">
+                No excess above package — this bill is already confirmed.
+              </div>
+            `}
+          </div>
+        `;
+        if (!canSubmit || exceeded <= 0) {
+          const remarksOnlyForm = document.getElementById('remarksOnlyForm');
+          if (remarksOnlyForm) {
+            const remarksStatus = document.getElementById('remarksStatus');
+            const remarksOnlyBtn = document.getElementById('remarksOnlyBtn');
+            remarksOnlyForm.addEventListener('submit', async (e) => {
+              e.preventDefault();
+              remarksStatus.className = 'status';
+              remarksStatus.textContent = '';
+              remarksOnlyBtn.disabled = true;
+              try {
+                const body = {
+                  officialUsage: Number(inv.official_usage) || 0,
+                  personalUsage: Number(inv.personal_usage) || 0,
+                  remarks: (document.getElementById('remarks')?.value || '').trim() || undefined,
+                };
+                const res = await fetch(apiBase() + '/invoices/folder/' + encodeURIComponent(tokenFromPath()) + '/submit', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                });
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(json.message || 'Save failed');
+                renderDone('Your remarks were saved. HR can now see them on your invoice record.');
+              } catch (err) {
+                remarksStatus.className = 'status err';
+                remarksStatus.textContent = err.message || 'Could not save remarks';
+                remarksOnlyBtn.disabled = false;
+              }
+            });
+          }
+          return;
+        }
+        const form = document.getElementById('approvalForm');
+        const official = document.getElementById('official');
+        const personal = document.getElementById('personal');
+        const status = document.getElementById('status');
+        const submitBtn = document.getElementById('submitBtn');
+        function syncSplit(changed) {
+          const total = exceeded;
+          if (changed === 'official') {
+            const off = Math.max(0, Number(official.value) || 0);
+            personal.value = Math.max(0, total - off).toFixed(2);
+          } else {
+            const per = Math.max(0, Number(personal.value) || 0);
+            official.value = Math.max(0, total - per).toFixed(2);
+          }
+        }
+        official.addEventListener('input', () => syncSplit('official'));
+        personal.addEventListener('input', () => syncSplit('personal'));
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          status.className = 'status';
+          status.textContent = '';
+          submitBtn.disabled = true;
+          try {
+            const body = {
+              officialUsage: Number(official.value) || 0,
+              personalUsage: Number(personal.value) || 0,
+              remarks: (document.getElementById('remarks')?.value || '').trim() || undefined,
+            };
+            const res = await fetch(apiBase() + '/invoices/folder/' + encodeURIComponent(tokenFromPath()) + '/submit', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.message || 'Submit failed');
+            renderDone(json.message || 'Your excess split was sent for approval. Approvers will be notified in order.');
+          } catch (err) {
+            status.className = 'status err';
+            status.textContent = err.message || 'Could not submit approval';
+            submitBtn.disabled = false;
+          }
+        });
+      }
+      async function boot() {
+        const token = tokenFromPath();
+        if (!token) {
+          document.getElementById('app').innerHTML = '<div class="done">Invalid approval link.</div>';
+          return;
+        }
+        try {
+          const res = await fetch(apiBase() + '/invoices/folder/' + encodeURIComponent(token));
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.message || 'Could not load invoice');
+          renderForm(json);
+        } catch (err) {
+          document.getElementById('app').innerHTML = '<div class="done">' + (err.message || 'Could not load invoice') + '</div>';
+        }
+      }
+      boot();
+    </script>
+  </body>
+</html>

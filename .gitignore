@@ -20,8 +20,9 @@ scripts/node_modules/
 npm-debug.log*
 .pm2/
 
-# Local samples / uploads (optional — keep repo small)
-samples/
+# Local samples / uploads — runtime data at repo root only (not server/dist/samples)
+/samples/
+/uploads/
 *.pdf
 
 # Build caches (keep committed dist for this project’s deploy model)

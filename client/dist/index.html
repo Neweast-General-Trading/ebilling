@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/ebilling/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+                                    <script>
+      (function () {
+        var p = new URLSearchParams(window.location.search);
+        var h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+        var u = p.get("uSrId");
+        var o = p.get("LoTp");
+        var c = p.get("co") || h.get("co");
+        var jwt = h.get("jwt") || p.get("jwt");
+        if (jwt && c) {
+          sessionStorage.setItem(
+            "eb_intranet_jwt",
+            JSON.stringify({ jwt: jwt, co: c }),
+          );
+        }
+        if (u && o && c) {
+          sessionStorage.setItem(
+            "eb_intranet_link",
+            JSON.stringify({ userId: u, otp: String(o), companyCode: c }),
+          );
+        }
+      })();
+    </script>
+    <div id="root"></div>
+  </body>
+</html>
