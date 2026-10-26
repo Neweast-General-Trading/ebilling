@@ -36,9 +36,28 @@ let OracleRecoveryService = OracleRecoveryService_1 = class OracleRecoveryServic
         return (process.env.ORACLE_BIP_REPORT_PATH ||
             '/Integration Reports/Integration_Report_1.xdo');
     }
+    getLegislationKey() {
+        const raw = String(process.env.ORACLE_RECOVERY_LEGISLATION || 'UAE').trim().toUpperCase();
+        if (raw === 'SA' || raw === 'SAUDI' || raw === 'SAUDI ARABIA')
+            return 'KSA';
+        if (raw === 'OM' || raw === 'OMN')
+            return 'OMAN';
+        if (raw === 'AE' || raw === 'U.A.E')
+            return 'UAE';
+        return raw || 'UAE';
+    }
+    getLegislationElementIds(legislation) {
+        const map = {
+            UAE: { elementTypeId: '300000007152917', inputValueId: '300000007152969', elementName: 'Other Deduction' },
+            KSA: { elementTypeId: '300000007223473', inputValueId: '300000007223553', elementName: 'Other Deduction' },
+            OMAN: { elementTypeId: '300000007220741', inputValueId: '300000007220773', elementName: 'Other Deduction' },
+        };
+        return map[legislation] || map.UAE;
+    }
     getElementNameCandidates() {
         const configured = process.env.ORACLE_RECOVERY_ELEMENT_NAME?.trim();
-        const elementName = configured || 'Other Deduction';
+        const fromLegislation = this.getLegislationElementIds(this.getLegislationKey()).elementName;
+        const elementName = configured || fromLegislation || 'Other Deduction';
         return [elementName];
     }
     isRecoveryElementName(elementName) {
@@ -319,14 +338,18 @@ let OracleRecoveryService = OracleRecoveryService_1 = class OracleRecoveryServic
         };
     }
     async resolveElementTemplate(elementNames) {
-        const configuredTypeId = process.env.ORACLE_RECOVERY_ELEMENT_TYPE_ID;
-        const configuredInputId = process.env.ORACLE_RECOVERY_INPUT_VALUE_ID;
-        const configuredName = process.env.ORACLE_RECOVERY_ELEMENT_NAME || elementNames[0];
+        const legislation = this.getLegislationKey();
+        const legislative = this.getLegislationElementIds(legislation);
+        const configuredTypeId = process.env.ORACLE_RECOVERY_ELEMENT_TYPE_ID || legislative.elementTypeId;
+        const configuredInputId = process.env.ORACLE_RECOVERY_INPUT_VALUE_ID || legislative.inputValueId;
+        const configuredName = process.env.ORACLE_RECOVERY_ELEMENT_NAME || legislative.elementName || elementNames[0];
+        this.logger.log(`Oracle Other Deduction IDs for ${legislation}: ElementTypeId=${configuredTypeId} InputValueId=${configuredInputId}`);
         if (configuredTypeId && configuredInputId) {
             return {
                 elementTypeId: configuredTypeId,
                 inputValueId: configuredInputId,
                 elementName: configuredName,
+                legislation,
             };
         }
         for (const elementName of elementNames) {

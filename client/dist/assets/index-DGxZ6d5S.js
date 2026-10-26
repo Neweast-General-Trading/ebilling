@@ -331,11 +331,12 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
                       onClick: () => { setRejectIds(null); setRejectReason(""); },
                       children: "Cancel",
                     }),
-                    i.jsx(Me, {
-                      className: "bg-red-600 text-white hover:bg-red-700",
+                    i.jsx("button", {
+                      type: "button",
+                      className: "eb-reject-confirm",
                       disabled: !!busyId,
                       onClick: () => rejectRows(rejectIds, rejectReason),
-                      children: busyId ? i.jsx(Kt, { className: "size-4 animate-spin" }) : "Confirm reject",
+                      children: busyId ? "Rejecting…" : "Confirm reject",
                     }),
                   ] }),
                 ],

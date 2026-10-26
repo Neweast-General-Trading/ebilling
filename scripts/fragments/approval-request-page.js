@@ -1,4 +1,4 @@
-function EbApprovalOpenModal({ row, co, onClose }) {
+function EbApprovalOpenModal({ row, co, token, onClose }) {
   const viewPdf = async () => {
     const invoiceId = row.invoice_id || row.invoiceId;
     if (!invoiceId) {
@@ -6,12 +6,25 @@ function EbApprovalOpenModal({ row, co, onClose }) {
       return;
     }
     try {
-      const { data } = await De.get(`${ze.INVOICES}/${invoiceId}/pdf?co=${encodeURIComponent(co)}`, { responseType: "blob" });
+      const urlPath = token
+        ? `${ze.EXCESS_APPROVAL_QUEUE_PDF(token, invoiceId)}`
+        : `${ze.EXCESS_APPROVAL_INVOICE_PDF}/${invoiceId}?co=${encodeURIComponent(co)}`;
+      const { data } = await De.get(urlPath, { responseType: "blob" });
+      if (data instanceof Blob && data.type && data.type.includes("application/json")) {
+        throw new Error("PDF endpoint returned an error");
+      }
       const url = window.URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
-      window.open(url, "_blank", "noopener,noreferrer");
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        const link = document.createElement("a");
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
       window.setTimeout(() => window.URL.revokeObjectURL(url), 60000);
-    } catch {
-      se.error("Could not open bill attachment");
+    } catch (err) {
+      se.error(Eo(err) || "Could not open bill attachment");
     }
   };
   const excess = row.excess ?? (row.invoice_total != null && row.package_total != null ? Math.max(0, Number(row.invoice_total) - Number(row.package_total)) : null);
@@ -182,16 +195,26 @@ function EbApprovalRequestPage() {
 
   const rows = queue.rows || [];
   const historyRows = history.rows || [];
+  const approvalFrozen = !!queue.approvalFrozen;
+  const approvalFrozenMessage = queue.approvalFrozenMessage || "Approvals are frozen from the 18th at 00:00 (Dubai) until month-end. Day 17 stays open until 23:59. Pending requests will NOT be processed with this month's salary deductions and will carry forward to the next billing cycle.";
   const allSelected = rows.length > 0 && selected.length === rows.length;
   const levelLabel = queue.levelOrder ? `Level ${queue.levelOrder} of ${queue.totalLevels}` : "Approver queue";
   const actorEmail = queue.approverEmail || history.approverEmail || qo() || "";
 
   const toggleRow = (invoiceId) => {
+    if (approvalFrozen) return;
     setSelected((prev) => prev.includes(invoiceId) ? prev.filter((id) => id !== invoiceId) : [...prev, invoiceId]);
   };
-  const toggleAll = () => setSelected(allSelected ? [] : rows.map((row) => row.invoiceId));
+  const toggleAll = () => {
+    if (approvalFrozen) return;
+    setSelected(allSelected ? [] : rows.map((row) => row.invoiceId));
+  };
 
   const approveRows = async (invoiceIds) => {
+    if (approvalFrozen) {
+      se.error(approvalFrozenMessage);
+      return;
+    }
     if (!invoiceIds.length) return;
     setBusyId("bulk");
     try {
@@ -225,6 +248,10 @@ function EbApprovalRequestPage() {
   };
 
   const rejectRows = async (invoiceIds, reason) => {
+    if (approvalFrozen) {
+      se.error(approvalFrozenMessage);
+      return;
+    }
     if (!invoiceIds.length || !reason.trim()) {
       se.error("Rejection reason is required");
       return;
@@ -294,23 +321,27 @@ function EbApprovalRequestPage() {
       i.jsxs(yt, { className: "flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3", children: [
         i.jsxs("div", { children: [
           i.jsx(jt, { className: "text-base", children: "Pending approvals" }),
-          i.jsx("p", { className: "mt-1 text-xs text-slate-500", children: "Review excess invoices — approve, reject, or open details in a popup." }),
+          i.jsx("p", { className: "mt-1 text-xs text-slate-500", children: approvalFrozen ? "Approvals are closed for this month's payroll cut-off." : "Review excess invoices — approve, reject, or open details in a popup." }),
         ] }),
-        i.jsxs("div", { className: "flex flex-wrap gap-2", children: [
+        approvalFrozen ? null : i.jsxs("div", { className: "flex flex-wrap gap-2", children: [
           i.jsxs(Me, { className: "bg-emerald-600 text-white hover:bg-emerald-700", disabled: !selected.length || !!busyId, onClick: () => approveRows(selected), children: [busyId ? i.jsx(Kt, { className: "size-4 animate-spin" }) : i.jsx(Dd, { className: "size-4" }), " Approve selected", selected.length ? ` (${selected.length})` : ""] }),
           i.jsxs(Me, { variant: "outline", className: "border-red-200 text-red-700 hover:bg-red-50", disabled: !selected.length || !!busyId, onClick: () => setRejectIds(selected), children: [i.jsx(Rf, { className: "size-4" }), " Reject selected", selected.length ? ` (${selected.length})` : ""] }),
         ] }),
       ] }),
+      approvalFrozen ? i.jsx("div", { className: "mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950", children: i.jsxs("div", { children: [
+        i.jsx("p", { className: "font-semibold", children: "Monthly approval freeze (from the 18th 00:00 Dubai)" }),
+        i.jsx("p", { className: "mt-1", children: approvalFrozenMessage }),
+      ] }) }) : null,
       i.jsx(We, { className: "p-0", children: loading ? i.jsxs("div", { className: "flex items-center justify-center gap-2 p-12 text-sm text-slate-500", children: [i.jsx(Kt, { className: "size-4 animate-spin" }), "Loading approval queue…"] }) : rows.length ? i.jsx("div", { className: "overflow-x-auto", children: i.jsxs("table", { className: "w-full min-w-[1040px] border-collapse text-sm", children: [
         i.jsx("thead", { children: i.jsxs("tr", { className: "border-b bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500", children: [
-          i.jsx("th", { className: "px-3 py-3 w-10", children: i.jsx("input", { type: "checkbox", className: "size-4 rounded border-slate-300", checked: allSelected, onChange: toggleAll, "aria-label": "Select all" }) }),
+          i.jsx("th", { className: "px-3 py-3 w-10", children: approvalFrozen ? null : i.jsx("input", { type: "checkbox", className: "size-4 rounded border-slate-300", checked: allSelected, onChange: toggleAll, "aria-label": "Select all" }) }),
           i.jsx("th", { className: "px-3 py-3", children: "Employee" }),
           i.jsx("th", { className: "px-2 py-3 w-12 text-center", title: "Other Deduction in Oracle", children: "OD" }),
           i.jsx("th", { className: "px-3 py-3", children: "Month" }), i.jsx("th", { className: "px-3 py-3 text-right", children: "Excess" }),
           i.jsx("th", { className: "px-3 py-3 text-right", children: "Official" }), i.jsx("th", { className: "px-3 py-3 text-right", children: "Personal" }), i.jsx("th", { className: "px-3 py-3", children: "Reference" }), i.jsx("th", { className: "px-3 py-3", children: "Remarks" }), i.jsx("th", { className: "px-3 py-3 text-right", children: "Actions" }),
         ] }) }),
         i.jsx("tbody", { children: rows.map((row) => i.jsxs("tr", { className: "border-b hover:bg-slate-50/80", children: [
-          i.jsx("td", { className: "px-3 py-3", children: i.jsx("input", { type: "checkbox", className: "size-4 rounded border-slate-300", checked: selected.includes(row.invoiceId), onChange: () => toggleRow(row.invoiceId) }) }),
+          i.jsx("td", { className: "px-3 py-3", children: approvalFrozen ? null : i.jsx("input", { type: "checkbox", className: "size-4 rounded border-slate-300", checked: selected.includes(row.invoiceId), onChange: () => toggleRow(row.invoiceId) }) }),
           i.jsx("td", { className: "px-3 py-3 font-medium", children: row.employee || "—" }),
           i.jsx("td", { className: "px-2 py-3 text-center", children: i.jsx(EbOracleDeductionCell, { status: deductionMap[row.invoiceId] }) }),
           i.jsx("td", { className: "px-3 py-3", children: row.monthLabel || row.month || "—" }),
@@ -321,8 +352,12 @@ function EbApprovalRequestPage() {
           i.jsx("td", { className: "px-3 py-3 max-w-[200px] truncate text-slate-600", title: row.remarks || "", children: row.remarks || "—" }),
           i.jsx("td", { className: "px-3 py-3", children: i.jsxs("div", { className: "flex justify-end gap-1.5", children: [
             i.jsx(Me, { variant: "outline", size: "sm", onClick: () => openInvoice(row), children: "Open" }),
-            i.jsx(Me, { size: "sm", className: "bg-emerald-600 text-white hover:bg-emerald-700", disabled: busyId === row.invoiceId, onClick: () => approveRows([row.invoiceId]), children: "Approve" }),
-            i.jsx(Me, { size: "sm", variant: "outline", className: "border-red-200 text-red-700", disabled: busyId === row.invoiceId, onClick: () => setRejectIds([row.invoiceId]), children: "Reject" }),
+            approvalFrozen
+              ? i.jsx("span", { className: "inline-flex items-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800", children: "Deferred to next month" })
+              : i.jsxs(i.Fragment, { children: [
+                  i.jsx(Me, { size: "sm", className: "bg-emerald-600 text-white hover:bg-emerald-700", disabled: busyId === row.invoiceId, onClick: () => approveRows([row.invoiceId]), children: "Approve" }),
+                  i.jsx(Me, { size: "sm", variant: "outline", className: "border-red-200 text-red-700", disabled: busyId === row.invoiceId, onClick: () => setRejectIds([row.invoiceId]), children: "Reject" }),
+                ] }),
           ] }) }),
         ] }, String(row.invoiceId))) }),
       ] }) }) : i.jsxs("div", { className: "p-12 text-center", children: [
@@ -346,10 +381,10 @@ function EbApprovalRequestPage() {
       i.jsx("textarea", { className: "mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm", rows: 4, value: rejectReason, onChange: (evt) => setRejectReason(evt.target.value), placeholder: "Reason…" }),
       i.jsxs("div", { className: "mt-4 flex justify-end gap-2", children: [
         i.jsx(Me, { variant: "outline", onClick: () => { setRejectIds(null); setRejectReason(""); }, children: "Cancel" }),
-        i.jsx(Me, { className: "bg-red-600 text-white hover:bg-red-700", disabled: !!busyId, onClick: () => rejectRows(rejectIds, rejectReason), children: busyId ? i.jsx(Kt, { className: "size-4 animate-spin" }) : "Confirm reject" }),
+        i.jsx("button", { type: "button", className: "eb-reject-confirm", disabled: !!busyId, onClick: () => rejectRows(rejectIds, rejectReason), children: busyId ? "Rejecting…" : "Confirm reject" }),
       ] }),
     ] }) }), document.body) : null,
-    detailRow ? i.jsx(EbApprovalOpenModal, { row: detailRow, co, onClose: () => setDetailRow(null) }) : null,
+    detailRow ? i.jsx(EbApprovalOpenModal, { row: detailRow, co, token, onClose: () => setDetailRow(null) }) : null,
   ] });
 }
 

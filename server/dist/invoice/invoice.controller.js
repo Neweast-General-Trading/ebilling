@@ -43,6 +43,19 @@ let InvoiceController = class InvoiceController {
             throw new Error('co query parameter is required');
         return this.invoiceService.getGridByMonth(co, month);
     }
+    monthlyReport(co, month) {
+        if (!co)
+            throw new Error('co query parameter is required');
+        return this.invoiceService.getMonthlyControlReport(co, month);
+    }
+    async exportMonthlyReport(co, month, res) {
+        if (!co)
+            throw new Error('co query parameter is required');
+        const file = await this.invoiceService.exportMonthlyControlExcel(co, month);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+        res.send(file.buffer);
+    }
     upload(co, file, req) {
         if (!co)
             throw new Error('co query parameter is required');
@@ -170,6 +183,23 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", void 0)
 ], InvoiceController.prototype, "grid", null);
+__decorate([
+    (0, common_1.Get)('monthly-report'),
+    __param(0, (0, common_1.Query)('co')),
+    __param(1, (0, common_1.Query)('month')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], InvoiceController.prototype, "monthlyReport", null);
+__decorate([
+    (0, common_1.Get)('monthly-report/export'),
+    __param(0, (0, common_1.Query)('co')),
+    __param(1, (0, common_1.Query)('month')),
+    __param(2, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], InvoiceController.prototype, "exportMonthlyReport", null);
 __decorate([
     (0, common_1.Post)('upload'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', multer_upload_config_1.multerUploadConfig)),

@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eBilling | Monthly Report</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/assets/index-fLDltgH_.css?v=202607170045full-cache-purge" />
+  <link rel="stylesheet" href="/assets/ebilling-shell.css?v=23" />
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <style>
+    .mr-page { max-width: 1280px; margin: 0 auto; padding: 1.5rem 1.5rem 2.5rem; }
+    .mr-table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
+    .mr-table { width: 100%; min-width: 1100px; border-collapse: collapse; font-size: 13px; }
+    .mr-table th {
+      position: sticky; top: 0; z-index: 2;
+      background: #f8fafc;
+      border-bottom: 1px solid #e2e8f0;
+      border-right: 1px solid #f1f5f9;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: #64748b;
+      padding: 10px 12px;
+      white-space: nowrap;
+    }
+    .mr-table td {
+      border-bottom: 1px solid #e2e8f0;
+      border-right: 1px solid #f1f5f9;
+      padding: 10px 12px;
+      vertical-align: top;
+      color: #0f172a;
+      background: #fff;
+    }
+    .mr-table th:last-child, .mr-table td:last-child { border-right: 0; }
+    .mr-table tbody tr:hover td { background: #f8fafc; }
+    .mr-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .mr-now { white-space: nowrap; }
+    .mr-wrap { white-space: normal; min-width: 200px; max-width: 280px; line-height: 1.45; color: #334155; }
+    .mr-sub { color: #64748b; font-size: 12px; margin-top: 2px; }
+    .mr-bad td { background: #fef2f2; }
+    .mr-note td { background: #fffbeb; }
+    .mr-pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill-ok { background: #ecfdf5; color: #047857; }
+    .pill-no { background: #f1f5f9; color: #475569; }
+    .pill-warn { background: #fff7ed; color: #c2410c; }
+    .pill-fail { background: #fef2f2; color: #b91c1c; }
+    .pill-info { background: #eff6ff; color: #1d4ed8; }
+    .mr-logo { height: 40px; width: auto; display: block; }
+    .mr-field { display: flex; flex-direction: column; gap: 4px; }
+    .mr-field span { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+    .mr-more { border: 0; background: none; padding: 0; color: #0369a1; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .mr-more:hover { text-decoration: underline; }
+    .mr-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-top: 1px solid #e2e8f0; background: #fff; }
+    .mr-pager-btns { display: flex; gap: 6px; }
+    .mr-pager button { height: 32px; min-width: 32px; border: 1px solid #e2e8f0; background: #fff; border-radius: 8px; font-size: 13px; cursor: pointer; padding: 0 10px; }
+    .mr-pager button:disabled { opacity: .4; cursor: not-allowed; }
+    .mr-pager button.on { background: #0f172a; color: #fff; border-color: #0f172a; }
+  </style>
+</head>
+<body>
+  <div class="mr-page space-y-5">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <img id="logo" class="mr-logo" alt="NEWEAST" src="/assets/login/logo.png" />
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-wide text-sky-700">eBilling</p>
+          <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900">Monthly Report</h1>
+          <p class="mt-1 max-w-2xl text-sm text-slate-500">Employee split, matrix approval, deduction, Oracle status, and remarks.</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="excelTop" type="button" class="h-10 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">Download Excel</button>
+        <a id="backLink" class="text-sm font-semibold text-sky-700 hover:text-sky-800" href="/invoices">← Invoices</a>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <label class="mr-field">
+        <span>Month</span>
+        <select id="month" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm"></select>
+      </label>
+      <label class="mr-field">
+        <span>Filter</span>
+        <select id="filter" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm">
+          <option value="all">All rows</option>
+          <option value="issues">Issues</option>
+          <option value="not-submit">Not submitted</option>
+          <option value="no-matrix">Oracle without approval</option>
+          <option value="failed">Oracle failed</option>
+          <option value="oracle">Sent to Oracle</option>
+          <option value="payroll">In payroll file</option>
+        </select>
+      </label>
+      <label class="mr-field">
+        <span>Approval</span>
+        <select id="approvalFilter" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm">
+          <option value="all">All</option>
+          <option value="not-submit">Not submitted</option>
+          <option value="approved">Approved</option>
+          <option value="pending">Pending / other</option>
+        </select>
+      </label>
+      <label class="mr-field">
+        <span>Oracle</span>
+        <select id="oracleFilter" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm">
+          <option value="all">All</option>
+          <option value="sent">Sent</option>
+          <option value="failed">Failed</option>
+          <option value="not-sent">Not sent</option>
+        </select>
+      </label>
+      <label class="mr-field">
+        <span>Usage</span>
+        <select id="usageFilter" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm">
+          <option value="all">All</option>
+          <option value="personal">Has personal</option>
+          <option value="official">Has official</option>
+          <option value="personal-only">Personal only</option>
+          <option value="official-only">Official only</option>
+          <option value="both">Personal and official</option>
+          <option value="none">No split (0 / 0)</option>
+        </select>
+      </label>
+      <label class="mr-field flex-1 min-w-[220px]">
+        <span>Search</span>
+        <input id="q" type="search" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm" placeholder="Name, person, phone" />
+      </label>
+      <label class="mr-field">
+        <span>Per page</span>
+        <select id="pageSize" class="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm">
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <button id="excel" type="button" class="h-10 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white">Download Excel</button>
+      <span id="count" class="mb-2 ml-auto text-sm text-slate-500"></span>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="mr-table-wrap" id="table"></div>
+      <div class="mr-pager" id="pager"></div>
+    </div>
+  </div>
+
+  <script>
+    function apiBase() {
+      var h = location.hostname;
+      if (h === "intranet.neweast.cloud") return "https://intranetapi.neweast.cloud/rectracking-api";
+      if (h === "ebilling.neweast.cloud") return location.origin + "/api";
+      if (h === "mis.neweast.cloud") return location.origin + "/ebilling/api";
+      return "http://172.1.0.14:5041";
+    }
+    function appBase() {
+      return location.hostname === "ebilling.neweast.cloud" ? "" : "/ebilling";
+    }
+    function money(n) {
+      if (n == null || n === "" || isNaN(Number(n))) return "";
+      return Number(n).toFixed(2);
+    }
+    function jwt() { return localStorage.getItem("jwt") || ""; }
+    function co() { return localStorage.getItem("rectracking_co") || "BI_NEGT"; }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    async function get(path) {
+      var r = await fetch(apiBase() + path, { headers: { Authorization: "Bearer " + jwt(), "Cache-Control": "no-cache" } });
+      if (r.status === 401) {
+        location.href = appBase() + "/login?returnTo=" + encodeURIComponent(location.href);
+        throw new Error("auth");
+      }
+      if (!r.ok) throw new Error((await r.text()) || r.status);
+      return r.json();
+    }
+
+    var state = { months: [], month: "", rows: [], filter: "all", approval: "all", oracle: "all", usage: "all", q: "", page: 1, pageSize: 25 };
+    document.getElementById("backLink").href = appBase() + "/invoices";
+    document.getElementById("logo").src = appBase() + "/assets/login/logo.png";
+
+    function issueText(row) {
+      if (row.issue === "NOT_SUBMITTED") return "Not submitted";
+      if (row.issue === "ORACLE_WITHOUT_MATRIX") return "Oracle without approval";
+      if (row.issue === "ORACLE_FAILED") return "Oracle failed";
+      if (row.issue === "APPROVED_NOT_SENT") return "Approved, not sent";
+      return "";
+    }
+    function detailsText(row) {
+      var parts = [];
+      if (row.invoiceCode) parts.push("Invoice: " + row.invoiceCode);
+      if (row.email) parts.push(row.email);
+      if (row.oracleError) parts.push(row.oracleError);
+      return parts.join("\n");
+    }
+    function pill(text, cls) {
+      if (!text) return "";
+      return '<span class="mr-pill ' + cls + '">' + esc(text) + "</span>";
+    }
+    function clampHtml(text) {
+      var t = String(text || "").trim();
+      if (!t) return "";
+      var full = esc(t).replace(/\n/g, "<br/>");
+      if (t.length <= 90) return full;
+      var short = esc(t.slice(0, 90).trim()) + "…";
+      return '<span class="mr-clamp"><span class="mr-short">' + short + '</span><span class="mr-full" hidden>' + full +
+        '</span> <button type="button" class="mr-more">Read more</button></span>';
+    }
+    function visible() {
+      var q = state.q.trim().toLowerCase();
+      return state.rows.filter(function (r) {
+        if (state.filter === "issues" && !r.issue) return false;
+        if (state.filter === "not-submit" && r.issue !== "NOT_SUBMITTED") return false;
+        if (state.filter === "oracle" && !r.oraclePosted) return false;
+        if (state.filter === "no-matrix" && r.issue !== "ORACLE_WITHOUT_MATRIX") return false;
+        if (state.filter === "failed" && r.issue !== "ORACLE_FAILED") return false;
+        if (state.filter === "payroll" && !r.inPayrollReport) return false;
+        if (state.approval === "not-submit" && !(r.notSubmittedBy15th || r.issue === "NOT_SUBMITTED")) return false;
+        if (state.approval === "approved" && !r.matrixApproved) return false;
+        if (state.approval === "pending" && (r.matrixApproved || r.notSubmittedBy15th || r.issue === "NOT_SUBMITTED")) return false;
+        if (state.oracle === "sent" && !r.oraclePosted) return false;
+        if (state.oracle === "failed" && !r.oracleFailed) return false;
+        if (state.oracle === "not-sent" && (r.oraclePosted || r.oracleFailed)) return false;
+        var personal = Number(r.personalUsage || r.deduction || 0) || 0;
+        var official = Number(r.officialUsage || 0) || 0;
+        if (state.usage === "personal" && personal <= 0) return false;
+        if (state.usage === "official" && official <= 0) return false;
+        if (state.usage === "personal-only" && !(personal > 0 && official <= 0)) return false;
+        if (state.usage === "official-only" && !(official > 0 && personal <= 0)) return false;
+        if (state.usage === "both" && !(personal > 0 && official > 0)) return false;
+        if (state.usage === "none" && (personal > 0 || official > 0)) return false;
+        if (!q) return true;
+        return ((r.employee || "") + " " + (r.personNumber || "") + " " + (r.phone || "") + " " + (r.remarks || "")).toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    function excelRows() {
+      return visible().map(function (r) {
+        return {
+          Month: r.monthLabel || r.month || state.monthLabel || state.month || "",
+          Employee: r.employee || "",
+          "Person Number": r.personNumber || "",
+          Phone: r.phone || "",
+          Approval: r.approvalLabel || "",
+          Matrix: r.matrixStatus || "",
+          "Official (AED)": r.officialUsage == null ? "" : Number(Number(r.officialUsage).toFixed(2)),
+          "Personal deduction (AED)": r.deduction == null ? "" : Number(Number(r.deduction).toFixed(2)),
+          Oracle: r.oracleLabel || "",
+          "Oracle error": r.oracleError || "",
+          "In payroll file": r.inPayrollReport ? "Yes" : "No",
+          Issue: issueText(r),
+          Remarks: r.remarks || "",
+          Invoice: r.invoiceCode || "",
+          Email: r.email || "",
+        };
+      });
+    }
+    function oraclePill(row) {
+      if (row.oraclePosted) return pill(row.oracleLabel, "pill-ok");
+      if (row.oracleFailed) return pill(row.oracleLabel, "pill-fail");
+      return pill(row.oracleLabel, "pill-no");
+    }
+    function renderPager(total, from, to, pages) {
+      var html = '<span class="text-sm text-slate-500">' + (total ? (from + "–" + to + " of " + total) : "0 rows") + "</span><div class='mr-pager-btns'>";
+      html += '<button type="button" data-p="prev"' + (state.page <= 1 ? " disabled" : "") + ">Prev</button>";
+      var start = Math.max(1, state.page - 2);
+      var end = Math.min(pages, start + 4);
+      start = Math.max(1, end - 4);
+      for (var i = start; i <= end; i++) {
+        html += '<button type="button" data-p="' + i + '" class="' + (i === state.page ? "on" : "") + '">' + i + "</button>";
+      }
+      html += '<button type="button" data-p="next"' + (state.page >= pages ? " disabled" : "") + ">Next</button></div>";
+      document.getElementById("pager").innerHTML = html;
+    }
+    function render() {
+      var rows = visible();
+      var pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+      if (state.page > pages) state.page = pages;
+      if (state.page < 1) state.page = 1;
+      var start = (state.page - 1) * state.pageSize;
+      var pageRows = rows.slice(start, start + state.pageSize);
+      var from = rows.length ? start + 1 : 0;
+      var to = Math.min(start + pageRows.length, rows.length);
+      document.getElementById("count").textContent = rows.length + " of " + state.rows.length;
+      document.getElementById("excel").disabled = !rows.length;
+      var topBtn = document.getElementById("excelTop");
+      if (topBtn) topBtn.disabled = !state.month;
+      renderPager(rows.length, from, to, pages);
+      if (!rows.length) {
+        document.getElementById("table").innerHTML = '<div class="p-12 text-center text-sm text-slate-500">No rows for this filter.</div>';
+        return;
+      }
+      var html = '<table class="mr-table"><thead><tr>' +
+        "<th>Employee</th><th>Person No</th><th>Phone</th><th>Approval</th><th>Matrix</th>" +
+        "<th>Official</th><th>Personal</th><th>Oracle</th><th>Payroll</th><th>Issue</th><th>Remarks</th><th>Details</th>" +
+        "</tr></thead><tbody>";
+      pageRows.forEach(function (r) {
+        var cls = r.issue === "ORACLE_WITHOUT_MATRIX" ? "mr-bad" : (r.issue === "NOT_SUBMITTED" || r.issue === "ORACLE_FAILED" ? "mr-note" : "");
+        html += '<tr class="' + cls + '">';
+        html += '<td class="mr-now"><div class="font-medium">' + esc(r.employee) + "</div></td>";
+        html += '<td class="mr-now">' + esc(r.personNumber) + "</td>";
+        html += '<td class="mr-now">' + esc(r.phone) + "</td>";
+        html += '<td class="mr-now">' + (r.notSubmittedBy15th || r.issue === "NOT_SUBMITTED" ? pill("Not submitted", "pill-warn") : esc(r.approvalLabel || "")) + "</td>";
+        html += '<td class="mr-now">' + (r.matrixApproved ? pill("Approved", "pill-ok") : pill(r.matrixStatus || "—", "pill-no")) + "</td>";
+        html += '<td class="mr-num">' + money(r.officialUsage) + "</td>";
+        html += '<td class="mr-num font-semibold">' + money(r.deduction) + "</td>";
+        html += '<td class="mr-now">' + oraclePill(r) + "</td>";
+        html += '<td class="mr-now">' + (r.inPayrollReport ? "Yes" : "No") + "</td>";
+        html += '<td class="mr-now">' + (issueText(r) ? pill(issueText(r), r.issue === "ORACLE_FAILED" ? "pill-fail" : "pill-warn") : "") + "</td>";
+        html += '<td class="mr-wrap">' + clampHtml(r.remarks) + "</td>";
+        html += '<td class="mr-wrap">' + clampHtml(detailsText(r)) + "</td>";
+        html += "</tr>";
+      });
+      html += "</tbody></table>";
+      document.getElementById("table").innerHTML = html;
+    }
+    function downloadBlob(blob, filename) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+    async function downloadExcel() {
+      var filename = "eBilling-monthly-report-" + (state.month || "month") + ".xlsx";
+      var rows = excelRows();
+      if (typeof XLSX !== "undefined" && rows.length) {
+        var wb = XLSX.utils.book_new();
+        var ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = [
+          { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 12 },
+          { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 40 }, { wch: 12 }, { wch: 22 }, { wch: 50 }, { wch: 18 }, { wch: 28 }
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, "Monthly Report");
+        XLSX.writeFile(wb, filename);
+        return;
+      }
+      var r = await fetch(apiBase() + "/invoices/monthly-report/export?co=" + encodeURIComponent(co()) + "&month=" + encodeURIComponent(state.month), {
+        headers: { Authorization: "Bearer " + jwt(), "Cache-Control": "no-cache" }
+      });
+      if (r.status === 401) {
+        location.href = appBase() + "/login?returnTo=" + encodeURIComponent(location.href);
+        return;
+      }
+      if (!r.ok) {
+        alert("Could not download Excel");
+        return;
+      }
+      downloadBlob(await r.blob(), filename);
+    }
+    async function loadMonths() {
+      var data = await get("/invoices/months?co=" + encodeURIComponent(co()));
+      state.months = data || [];
+      var sel = document.getElementById("month");
+      sel.innerHTML = state.months.map(function (m) {
+        return '<option value="' + m.month + '">' + m.label + "</option>";
+      }).join("");
+      state.month = (location.hash || "").replace("#", "") || (state.months[0] && state.months[0].month) || "";
+      if (state.month) sel.value = state.month;
+    }
+    async function loadReport() {
+      if (!state.month) return;
+      document.getElementById("table").innerHTML = '<div class="p-12 text-center text-sm text-slate-500">Loading…</div>';
+      var data = await get("/invoices/monthly-report?co=" + encodeURIComponent(co()) + "&month=" + encodeURIComponent(state.month));
+      state.rows = data.rows || [];
+      state.monthLabel = data.monthLabel || state.month;
+      history.replaceState(null, "", "#" + state.month);
+      render();
+    }
+    function resetPageAndRender() { state.page = 1; render(); }
+    document.getElementById("month").addEventListener("change", function (e) {
+      state.month = e.target.value;
+      state.page = 1;
+      loadReport().catch(function (err) {
+        document.getElementById("table").innerHTML = '<div class="p-12 text-center text-sm text-slate-500">' + esc(err.message) + "</div>";
+      });
+    });
+    document.getElementById("filter").addEventListener("change", function (e) { state.filter = e.target.value; resetPageAndRender(); });
+    document.getElementById("approvalFilter").addEventListener("change", function (e) { state.approval = e.target.value; resetPageAndRender(); });
+    document.getElementById("oracleFilter").addEventListener("change", function (e) { state.oracle = e.target.value; resetPageAndRender(); });
+    document.getElementById("usageFilter").addEventListener("change", function (e) { state.usage = e.target.value; resetPageAndRender(); });
+    document.getElementById("pageSize").addEventListener("change", function (e) { state.pageSize = Number(e.target.value) || 25; resetPageAndRender(); });
+    document.getElementById("q").addEventListener("input", function (e) { state.q = e.target.value; resetPageAndRender(); });
+    document.getElementById("pager").addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b || b.disabled) return;
+      var p = b.getAttribute("data-p");
+      if (p === "prev") state.page -= 1;
+      else if (p === "next") state.page += 1;
+      else state.page = Number(p) || 1;
+      render();
+    });
+    document.getElementById("table").addEventListener("click", function (e) {
+      var btn = e.target.closest(".mr-more");
+      if (!btn) return;
+      var wrap = btn.closest(".mr-clamp");
+      var open = !wrap.querySelector(".mr-full").hidden;
+      wrap.querySelector(".mr-short").hidden = !open;
+      wrap.querySelector(".mr-full").hidden = open;
+      btn.textContent = open ? "Read more" : "Read less";
+    });
+    document.getElementById("excel").addEventListener("click", downloadExcel);
+    document.getElementById("excelTop").addEventListener("click", downloadExcel);
+    (async function () {
+      if (!jwt()) {
+        location.href = appBase() + "/login?returnTo=" + encodeURIComponent(location.href);
+        return;
+      }
+      await loadMonths();
+      await loadReport();
+    })().catch(function (err) {
+      document.getElementById("table").innerHTML = '<div class="p-12 text-center text-sm text-slate-500">' + esc(err.message || err) + "</div>";
+    });
+  </script>
+</body>
+</html>

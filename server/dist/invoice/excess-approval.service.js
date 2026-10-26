@@ -23,7 +23,9 @@ const invoice_billing_util_1 = require("./invoice-billing.util");
 const invoice_service_1 = require("./invoice.service");
 const teams_notifier_1 = require("../common/teams-notifier");
 const recovery_teams_message_1 = require("./recovery-teams-message");
+const approval_freeze_util_1 = require("../common/approval-freeze.util");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const FINANCE_DEDUCTION_TO = 'sona.jacob@neweast.co';
 const FINANCE_DEDUCTION_CC = ['info.hq@neweast.co', 'end.bill@neweast.co', 'Vinod.Kumar@neweast.co'];
 const FINANCE_DEDUCTION_BCC = ['sakour@neweast.co'];
@@ -31,11 +33,14 @@ const ORACLE_IT_HELP_TO = 'it.helpdesk@neweast.co';
 const ORACLE_IT_HELP_CC = ['Vinod.Kumar@neweast.co', 'sakour@neweast.co'];
 const APPROVAL_AUDIT_CC = ['info.hq@neweast.co'];
 const APPROVAL_AUDIT_BCC = ['sakour@neweast.co'];
+const APPROVAL_FREEZE_UI_MESSAGE = 'Approvals are frozen from the 18th at 00:00 (Dubai) until month-end. Day 17 stays open until 23:59. Pending requests will NOT be processed with this month\'s salary deductions and will carry forward to the next billing cycle.';
 function resolveMailList(emails, excludeDeliverTo) {
-    const exclude = excludeDeliverTo?.trim().toLowerCase();
+    const excludeSet = new Set((Array.isArray(excludeDeliverTo) ? excludeDeliverTo : [excludeDeliverTo])
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase()));
     return emails
         .map((email) => (0, mail_config_1.resolveMailRecipient)(email).deliverTo)
-        .filter((address) => !exclude || address.trim().toLowerCase() !== exclude);
+        .filter((address) => !excludeSet.size || !excludeSet.has(String(address).trim().toLowerCase()));
 }
 function normalizeEmail(email) {
     return (0, ebilling_admin_access_1.normalizeEmail)(email);
@@ -320,14 +325,17 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
          AND ear.current_level = ANY($2::int[])
        ORDER BY ear.submitted_at ASC`, [co, approverLevels]);
         const levelOrder = approverLevels.length === 1 ? approverLevels[0] : null;
+        const freeze = (0, approval_freeze_util_1.getApprovalFreezeInfo)();
         return {
             co,
             approverEmail: email,
             levelOrder,
             totalLevels,
             rows: rows.map(mapQueueRow),
-            canAct,
-            readOnly: !canAct,
+            canAct: canAct && !freeze.frozen,
+            readOnly: !canAct || freeze.frozen,
+            approvalFrozen: freeze.frozen,
+            approvalFrozenMessage: freeze.frozen ? APPROVAL_FREEZE_UI_MESSAGE : null,
         };
     }
     async notifyLevelApprovers(co, levelOrder, context) {
@@ -338,26 +346,45 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
         const pendingCount = Number(rows[0]?.cnt ?? 0);
         if (!pendingCount || !approvers.length)
             return;
+        // One shared email to all level approvers (To: everyone) — cuts SMTP usage vs 1 mail each.
+        const deliverTos = [];
+        const seenDeliver = new Set();
+        for (const email of approvers) {
+            const { deliverTo } = (0, mail_config_1.resolveMailRecipient)(email);
+            const key = String(deliverTo || '').trim().toLowerCase();
+            if (!key || seenDeliver.has(key))
+                continue;
+            seenDeliver.add(key);
+            deliverTos.push(deliverTo);
+        }
+        if (!deliverTos.length)
+            return;
+        const approvalUrl = (0, recovery_teams_message_1.buildExcessApprovalRequestUrl)(co, null);
+        const displayEmails = approvers.map((email) => (0, ebilling_admin_access_1.formatDisplayEmail)(email));
+        const { subject, html } = (0, excess_approval_email_template_1.buildExcessApproverNotificationEmail)({
+            approverName: deliverTos.length > 1
+                ? `Level ${levelOrder} approvers`
+                : displayEmails[0] || `Level ${levelOrder} approver`,
+            approverEmails: displayEmails,
+            levelOrder,
+            totalLevels,
+            pendingCount,
+            approvalUrl,
+            newRequestsCount: context?.newRequestsCount ?? null,
+            co,
+            sharedRecipients: deliverTos.length > 1,
+        });
+        await (0, mail_config_1.sendMail)({
+            to: deliverTos,
+            cc: resolveMailList(APPROVAL_AUDIT_CC, deliverTos),
+            bcc: resolveMailList(APPROVAL_AUDIT_BCC, deliverTos),
+            subject,
+            html,
+        });
+        this.logger.log(`Excess approval L${levelOrder} email sent once to ${deliverTos.length} recipient(s): ${deliverTos.join(', ')}`);
+        // Teams still notifies each person (different channel / MailID), using their personal link.
         for (const email of approvers) {
             const accessToken = await this.getApproverAccessToken(co, email);
-            const approvalUrl = (0, recovery_teams_message_1.buildExcessApprovalRequestUrl)(co, accessToken);
-            const { subject, html } = (0, excess_approval_email_template_1.buildExcessApproverNotificationEmail)({
-                approverName: (0, ebilling_admin_access_1.formatDisplayEmail)(email),
-                levelOrder,
-                totalLevels,
-                pendingCount,
-                approvalUrl,
-                newRequestsCount: context?.newRequestsCount ?? null,
-                co,
-            });
-            const { deliverTo } = (0, mail_config_1.resolveMailRecipient)(email);
-            await (0, mail_config_1.sendMail)({
-                to: deliverTo,
-                cc: resolveMailList(APPROVAL_AUDIT_CC, deliverTo),
-                bcc: resolveMailList(APPROVAL_AUDIT_BCC, deliverTo),
-                subject,
-                html,
-            });
             const teamsDesc = (0, recovery_teams_message_1.buildExcessApprovalRequestTeamsMessage)({
                 co,
                 approverEmail: (0, ebilling_admin_access_1.formatDisplayEmail)(email),
@@ -403,7 +430,13 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
          rejected_at = NULL,
          completed_at = NULL,
          oracle_recovery_ref = NULL`, [invoiceId, co, officialUsage, personalUsage, employeeRemarks]);
-        await this.db.query(`UPDATE invoices SET approval_status = 'pending_excess_approval' WHERE id = $1`, [invoiceId]);
+        await this.ensureRejectColumns();
+        await this.db.query(`UPDATE invoices
+       SET approval_status = 'pending_excess_approval',
+           excess_reject_reason = NULL,
+           excess_rejected_by = NULL,
+           excess_rejected_at = NULL
+       WHERE id = $1`, [invoiceId]);
         if (!options.skipNotify) {
             await this.notifyLevelApprovers(co, 1, {
                 employeeName: gridRow?.display_name ?? null,
@@ -420,6 +453,7 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
        VALUES ($1, $2, $3, $4, $5)`, [requestId, levelOrder, approverEmail, action, rejectReason || null]);
     }
     async completeApproval(co, requestId, approverEmail) {
+        await this.ensureRejectColumns();
         const { rows } = await this.db.query(`SELECT ear.*, i.id AS inv_id,
         i.approval_status AS inv_approval_status,
         i.recovery_status AS inv_recovery_status,
@@ -509,120 +543,33 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
             await this.db.query(`UPDATE excess_approval_requests SET oracle_recovery_ref = $2::jsonb WHERE id = $1`, [requestId, oracleRefJson]);
         }
         else {
+            // Queue for the monthly Oracle batch (after day-17 cut-off / 18th 00:00 Dubai).
             await this.db.query(`UPDATE invoices
            SET approval_status = 'ready_for_recovery',
                recovery_status = 'pending',
-               recovery_last_error = NULL
+               recovery_last_error = NULL,
+               excess_reject_reason = NULL,
+               excess_rejected_by = NULL,
+               excess_rejected_at = NULL
            WHERE id = $1`, [invoiceId]);
-            const eligibility = await this.invoiceService.assessOracleOdEligibility(co, invoiceId, personalUsage);
-            if (eligibility.eligible) {
-                const push = await this.invoiceService.tryPushRecoveryFromWorkflow(co, invoiceId, {
-                    email: approverEmail,
-                    name: (0, ebilling_admin_access_1.formatDisplayEmail)(approverEmail),
+            finalStatus = 'ready_for_recovery';
+            try {
+                await this.sendApproversCompletionEmail({
+                    requestId,
+                    invoiceCode: req.invoice_code,
+                    employeeName: req.display_name,
+                    phoneNumber: req.phone_number,
+                    monthLabel,
+                    personalUsage,
+                    officialUsage,
+                    exceededAmount,
+                    oracleResult: null,
+                    approverEmail,
+                    approvers: approverPayload,
                 });
-                if (push.success) {
-                    oracleResult = push.oracle;
-                    finalStatus = 'recovery_sent';
-                    const oracleRefJson = oracleResult
-                        ? (typeof oracleResult === 'string' ? oracleResult : JSON.stringify(oracleResult))
-                        : null;
-                    await this.db.query(`UPDATE excess_approval_requests SET oracle_recovery_ref = $2::jsonb WHERE id = $1`, [requestId, oracleRefJson]);
-                    try {
-                        await this.sendFinanceNotification({
-                            gridRow: push.row || (await this.invoiceService.getGridRowByInvoiceId(co, invoiceId)),
-                            exceededAmount,
-                            officialUsage,
-                            personalUsage,
-                            oracleResult,
-                            approverEmail,
-                        });
-                    }
-                    catch (err) {
-                        console.error(`[ExcessApproval] Finance notification failed for request ${requestId}:`, err);
-                    }
-                    try {
-                        await this.sendApproversCompletionEmail({
-                            requestId,
-                            invoiceCode: req.invoice_code,
-                            employeeName: req.display_name,
-                            phoneNumber: req.phone_number,
-                            monthLabel,
-                            personalUsage,
-                            officialUsage,
-                            exceededAmount,
-                            oracleResult,
-                            approverEmail,
-                            approvers: approverPayload,
-                        });
-                    }
-                    catch (err) {
-                        console.error(`[ExcessApproval] Approver completion email failed for request ${requestId}:`, err);
-                    }
-                    try {
-                        await this.invoiceService.sendEmployeeDeductionConfirmationEmail(co, invoiceId);
-                    }
-                    catch (err) {
-                        console.error(`[ExcessApproval] Employee deduction email failed for request ${requestId}:`, err);
-                    }
-                }
-                else {
-                    manualOracle = true;
-                    finalStatus = 'ready_for_recovery';
-                    await this.db.query(`UPDATE invoices
-             SET recovery_status = 'failed',
-                 recovery_last_error = $1,
-                 recovery_last_attempt_at = NOW()
-             WHERE id = $2`, [push.error || 'Oracle recovery push failed', invoiceId]);
-                    try {
-                        await this.sendOracleManualRequiredEmail({
-                            requestId,
-                            invoiceCode: req.invoice_code,
-                            employeeName: req.display_name,
-                            phoneNumber: req.phone_number,
-                            personNumber: eligibility.personNumber || req.person_number,
-                            monthLabel,
-                            exceededAmount,
-                            officialUsage,
-                            personalUsage,
-                            approverEmail,
-                            oracleError: push.error || 'Oracle recovery push failed after eligibility check',
-                            approvers: approverPayload,
-                        });
-                    }
-                    catch (err) {
-                        console.error(`[ExcessApproval] Manual Oracle email failed for request ${requestId}:`, err);
-                    }
-                }
             }
-            else {
-                manualOracle = true;
-                finalStatus = 'ready_for_recovery';
-                const manualReason = eligibility.reason ||
-                    'Other Deduction field is not eligible or does not match Oracle for this employee';
-                await this.db.query(`UPDATE invoices
-           SET recovery_status = 'failed',
-               recovery_last_error = $1,
-               recovery_last_attempt_at = NOW()
-           WHERE id = $2`, [manualReason, invoiceId]);
-                try {
-                    await this.sendOracleManualRequiredEmail({
-                        requestId,
-                        invoiceCode: req.invoice_code,
-                        employeeName: req.display_name,
-                        phoneNumber: req.phone_number,
-                        personNumber: eligibility.personNumber || req.person_number,
-                        monthLabel,
-                        exceededAmount,
-                        officialUsage,
-                        personalUsage,
-                        approverEmail,
-                        oracleError: manualReason,
-                        approvers: approverPayload,
-                    });
-                }
-                catch (err) {
-                    console.error(`[ExcessApproval] Manual Oracle email failed for request ${requestId}:`, err);
-                }
+            catch (err) {
+                console.error(`[ExcessApproval] Approver completion email failed for request ${requestId}:`, err);
             }
         }
         if (alreadySent) {
@@ -741,6 +688,20 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
         if (!trimmed) {
             throw new common_1.BadRequestException('Rejection reason is required');
         }
+        await this.ensureRejectColumns();
+        const { rows } = await this.db.query(`SELECT ear.invoice_id, ear.official_usage, ear.personal_usage,
+              i.invoice_code, i.amount_due AS invoice_total,
+              COALESCE(e.total_amount, e.package_value, 0) AS package_total,
+              e.display_name, e.email, e.phone_number,
+              to_char(i.billing_month, 'YYYY-MM') AS month_key
+         FROM excess_approval_requests ear
+         INNER JOIN invoices i ON i.id = ear.invoice_id
+         INNER JOIN sim_employees e ON e.id = i.sim_employee_id
+        WHERE ear.id = $1 AND ear.co = $2`, [requestId, co]);
+        const req = rows[0];
+        if (!req) {
+            throw new common_1.NotFoundException('Approval request not found');
+        }
         await this.db.query(`UPDATE excess_approval_requests
        SET status = 'rejected',
            rejected_by = $2,
@@ -748,13 +709,55 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
            rejected_at = NOW(),
            completed_at = NOW()
        WHERE id = $1 AND co = $4 AND status = 'pending'`, [requestId, approverEmail, trimmed, co]);
-        const { rows } = await this.db.query(`SELECT invoice_id FROM excess_approval_requests WHERE id = $1`, [requestId]);
-        const invoiceId = rows[0]?.invoice_id;
-        if (invoiceId) {
-            await this.db.query(`UPDATE invoices SET approval_status = 'excess_rejected' WHERE id = $1`, [invoiceId]);
+        const invoiceId = req.invoice_id;
+        const token = crypto.randomUUID();
+        await this.db.query(`UPDATE invoices
+       SET approval_status = 'waiting_confirmation',
+           approval_token = $2,
+           approval_token_expires_at = NOW() + INTERVAL '30 days',
+           approval_sent_at = NOW(),
+           approval_email_count = COALESCE(approval_email_count, 0) + 1,
+           excess_reject_reason = $3,
+           excess_rejected_by = $4,
+           excess_rejected_at = NOW()
+       WHERE id = $1`, [invoiceId, token, trimmed, approverEmail]);
+        const exceededAmount = (0, invoice_billing_util_1.calculateExceededAmount)(Number(req.invoice_total), Number(req.package_total));
+        const monthLabel = (0, invoice_billing_util_1.formatBillingMonthLabel)(String(req.month_key || '').slice(0, 7));
+        const splitUrl = `${publicBaseUrl()}/folder/${token}`;
+        const employeeEmail = String(req.email || '').trim();
+        if (employeeEmail) {
+            const { subject, html } = (0, excess_approval_email_template_1.buildExcessRejectedResplitEmail)({
+                employeeName: req.display_name,
+                monthLabel,
+                invoiceCode: req.invoice_code,
+                exceededAmount,
+                officialUsage: Number(req.official_usage) || 0,
+                personalUsage: Number(req.personal_usage) || 0,
+                rejectReason: trimmed,
+                rejectedBy: (0, ebilling_admin_access_1.formatDisplayEmail)(approverEmail),
+                splitUrl,
+            });
+            const { deliverTo } = (0, mail_config_1.resolveMailRecipient)(employeeEmail);
+            await (0, mail_config_1.sendMail)({
+                to: deliverTo,
+                subject,
+                html,
+            });
         }
+        this.logger.log(`Excess approval rejected for invoice ${invoiceId}; resplit link emailed to ${employeeEmail || 'no-email'}`);
+        return { invoiceId, splitUrl };
+    }
+    async ensureRejectColumns() {
+        if (this.invoiceService?.ensureInvoiceRejectColumns) {
+            await this.invoiceService.ensureInvoiceRejectColumns();
+            return;
+        }
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_reject_reason TEXT`);
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_rejected_by VARCHAR(255)`);
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_rejected_at TIMESTAMPTZ`);
     }
     async approveItems(token, invoiceIds, actorEmailOverride, viewerEmail) {
+        (0, approval_freeze_util_1.assertExcessApprovalNotFrozen)();
         await this.assertCanActAsTokenOwner(token, viewerEmail);
         const { co, email } = await this.resolveAccessContext(token);
         const approverEmail = actorEmailOverride || email;
@@ -808,6 +811,7 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
         return { results };
     }
     async rejectItems(token, invoiceIds, reason, viewerEmail) {
+        (0, approval_freeze_util_1.assertExcessApprovalNotFrozen)();
         await this.assertCanActAsTokenOwner(token, viewerEmail);
         const { co, email } = await this.resolveAccessContext(token);
         const approverLevels = await this.getApproverLevel(co, email);
@@ -837,6 +841,7 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
         }
         const token = await this.getApproverAccessToken(co, email);
         if (!token) {
+            const freeze = (0, approval_freeze_util_1.getApprovalFreezeInfo)();
             return {
                 co,
                 approverEmail: email,
@@ -846,6 +851,8 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
                 approvalUrl: null,
                 canAct: false,
                 readOnly: true,
+                approvalFrozen: freeze.frozen,
+                approvalFrozenMessage: freeze.frozen ? APPROVAL_FREEZE_UI_MESSAGE : null,
             };
         }
         const approverLevels = await this.getApproverLevel(co, email);
@@ -919,6 +926,31 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
             throw new common_1.InternalServerErrorException('Invoice service not available');
         }
         return this.invoiceService.getOracleOtherDeductionStatusBatch(co, ids);
+    }
+    async getInvoicePdfForActor(co, invoiceId, actorEmail) {
+        const email = normalizeEmail(actorEmail);
+        if (!email || !(0, ebilling_admin_access_1.canAccessEbilling)(email)) {
+            throw new common_1.ForbiddenException('You do not have access to eBilling');
+        }
+        const isApprover = (await this.getApproverLevel(co, email)).length > 0;
+        const canTrack = (0, ebilling_admin_access_1.canTrackExcessApprovalRequests)(email);
+        if (!isApprover && !canTrack) {
+            throw new common_1.ForbiddenException('You are not allowed to open this bill attachment');
+        }
+        await this.assertInvoiceIdsInApprovalWorkflow(co, [invoiceId]);
+        if (!this.invoiceService) {
+            throw new common_1.InternalServerErrorException('Invoice service not available');
+        }
+        return this.invoiceService.getPdfAttachment(co, invoiceId);
+    }
+    async getInvoicePdfForToken(token, invoiceId, viewerEmail) {
+        await this.assertCanActAsTokenOwner(token, viewerEmail);
+        const { co } = await this.resolveAccessContext(token);
+        await this.assertInvoiceIdsInApprovalWorkflow(co, [invoiceId]);
+        if (!this.invoiceService) {
+            throw new common_1.InternalServerErrorException('Invoice service not available');
+        }
+        return this.invoiceService.getPdfAttachment(co, invoiceId);
     }
     async listAllRequestsForAdmin(co, actor) {
         if (!(0, ebilling_admin_access_1.canTrackExcessApprovalRequests)(actor?.email)) {
@@ -1040,7 +1072,79 @@ let ExcessApprovalService = ExcessApprovalService_1 = class ExcessApprovalServic
                 levels,
             };
         });
+        const latestByInvoice = new Map();
+        for (const row of mappedRows) {
+            const invoiceId = String(row.invoiceId || '');
+            const ts = new Date(row.submittedAt || 0).getTime();
+            if (!latestByInvoice.has(invoiceId) || ts >= latestByInvoice.get(invoiceId)) {
+                latestByInvoice.set(invoiceId, ts);
+            }
+        }
+        for (const row of mappedRows) {
+            const invoiceId = String(row.invoiceId || '');
+            const isLatest = new Date(row.submittedAt || 0).getTime() === latestByInvoice.get(invoiceId);
+            row.notSubmittedByEmp = isLatest && String(row.requestStatus) === 'rejected';
+        }
         return { co, totalLevels, rows: mappedRows };
+    }
+    mapAllRequestExcelRow(row) {
+        const notSubmit = !!(row.notSubmittedByEmp || row.requestStatus === 'rejected');
+        const status = notSubmit
+            ? 'Not submit by emp'
+            : row.requestStatus === 'approved'
+                ? 'Approved'
+                : (row.currentLevel ? `In progress · L${row.currentLevel}` : 'In progress');
+        const levelText = (order) => {
+            if (notSubmit)
+                return '';
+            const lv = (row.levels || []).find((item) => Number(item.levelOrder) === order);
+            if (!lv)
+                return '';
+            if (lv.status === 'approved')
+                return 'Approved';
+            if (lv.status === 'current')
+                return 'In progress';
+            if (lv.status === 'rejected')
+                return '';
+            return 'Pending';
+        };
+        return {
+            Month: row.monthLabel || row.Month || row.month || '',
+            Employee: row.employee || row.Employee || '',
+            Invoice: row.reference || row.Invoice || row.invoiceCode || '',
+            Official: row.Official != null ? row.Official : (row.officialUsage == null ? '' : Number(Number(row.officialUsage).toFixed(2))),
+            Personal: row.Personal != null ? row.Personal : (row.personalUsage == null ? '' : Number(Number(row.personalUsage).toFixed(2))),
+            Status: row.Status || status,
+            L1: row.L1 != null ? row.L1 : levelText(1),
+            L2: row.L2 != null ? row.L2 : levelText(2),
+            L3: row.L3 != null ? row.L3 : levelText(3),
+            Submitted: row.Submitted || row.submittedAt || '',
+        };
+    }
+    async exportAllRequestsExcel(co, actor, options = {}) {
+        await this.listAllRequestsForAdmin(co, actor);
+        let source = Array.isArray(options.rows) ? options.rows : [];
+        if (!source.length) {
+            const all = await this.listAllRequests(co);
+            source = all.rows || [];
+            const month = String(options.month || '').slice(0, 7);
+            if (month)
+                source = source.filter((row) => String(row.month || '').slice(0, 7) === month);
+        }
+        const rows = source.map((row) => this.mapAllRequestExcelRow(row));
+        const XLSX = require('xlsx');
+        const workbook = XLSX.utils.book_new();
+        const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: 'No approval requests for this filter.' }]);
+        sheet['!cols'] = [
+            { wch: 16 }, { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+            { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 },
+        ];
+        XLSX.utils.book_append_sheet(workbook, sheet, 'All Requests');
+        const monthPart = String(options.month || '').slice(0, 7) || 'all';
+        return {
+            filename: `eBilling-all-requests-${monthPart}.xlsx`,
+            buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
+        };
     }
     finalStatusLabel(row) {
         if (row.requestStatus === 'rejected') {

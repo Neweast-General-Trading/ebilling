@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eBilling Flow</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" />
+  <style>
+    :root {
+      --red: #c8102e;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --bg: #f8fafc;
+      --card: #fff;
+      --ok: #047857;
+      --warn: #b45309;
+      --stop: #b91c1c;
+      --go: #0369a1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .top {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand img { height: 36px; }
+    .brand h1 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+    .brand p { margin: 0; font-size: 12px; color: var(--muted); }
+    .back {
+      color: var(--go);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .lead { margin: 0 0 20px; color: var(--muted); font-size: 14px; max-width: 820px; }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .tstep {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 14px 12px;
+      min-height: 108px;
+    }
+    .tstep .when { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--red); }
+    .tstep strong { display: block; margin: 4px 0 6px; font-size: 14px; }
+    .tstep span { font-size: 12px; color: var(--muted); }
+
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
+    .cases {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      position: sticky;
+      top: 16px;
+    }
+    .cases h3 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+    }
+    .cases button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      padding: 11px 14px;
+      cursor: pointer;
+      font: inherit;
+      color: var(--text);
+    }
+    .cases button:last-child { border-bottom: 0; }
+    .cases button:hover { background: #f8fafc; }
+    .cases button.active { background: #fff1f2; box-shadow: inset 3px 0 0 var(--red); }
+    .cases button small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 22px 24px 26px;
+      min-height: 420px;
+    }
+    .kicker { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--red); margin: 0 0 6px; }
+    .panel h2 { font-size: 22px; }
+    .panel .desc { color: var(--muted); font-size: 14px; margin: 0 0 22px; }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+      gap: 8px;
+      margin: 0 0 22px;
+    }
+    .node {
+      flex: 1 1 120px;
+      min-width: 110px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #f8fafc;
+    }
+    .node em { display: block; font-style: normal; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .node.ok { background: #ecfdf5; border-color: #a7f3d0; }
+    .node.warn { background: #fffbeb; border-color: #fde68a; }
+    .node.stop { background: #fef2f2; border-color: #fecaca; }
+    .node.go { background: #f0f9ff; border-color: #bae6fd; }
+    .arrow {
+      align-self: center;
+      color: #94a3b8;
+      font-size: 18px;
+      flex: 0 0 auto;
+    }
+
+    .facts { margin: 0; padding: 0; list-style: none; }
+    .facts li {
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .facts li:first-child { border-top: 0; }
+    .facts b { color: var(--text); }
+
+    @media (max-width: 900px) {
+      .timeline, .layout { grid-template-columns: 1fr; }
+      .cases { position: static; }
+      .top { padding: 14px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="/assets/login/logo.png" alt="NEWEAST" onerror="this.style.display='none'" />
+      <div>
+        <h1>eBilling Flow</h1>
+        <p>Excess split, approval matrix, 15th rule, Oracle deduction</p>
+      </div>
+    </div>
+    <a class="back" id="backLink" href="/approval-request">← Approval Request</a>
+  </header>
+
+  <div class="wrap">
+    <h2>Monthly calendar</h2>
+    <p class="lead">All cut-offs use Asia/Dubai. The employee has until the end of the 15th. The system applies the default rule at 16th 00:00. Approvals freeze and Oracle posts at 18th 00:00.</p>
+    <div class="timeline">
+      <div class="tstep"><div class="when">Until 15th 23:59</div><strong>Employee window</strong><span>Split the excess, or correct a rejected split.</span></div>
+      <div class="tstep"><div class="when">16th 00:00</div><strong>Default rule</strong><span>If the request reached them and they did not submit: full excess becomes personal.</span></div>
+      <div class="tstep"><div class="when">Until 17th 23:59</div><strong>Matrix still open</strong><span>Audit / L2 / L3 can approve or reject submitted splits.</span></div>
+      <div class="tstep"><div class="when">18th 00:00</div><strong>Payroll cut-off</strong><span>Approvals freeze. Personal amounts post to Oracle Other Deduction. Report to Sona / Vinod.</span></div>
+    </div>
+
+    <div class="layout">
+      <nav class="cases">
+        <h3>Cases</h3>
+        <button type="button" class="active" data-id="master"><b>Master path</b><small>Happy path from bill to Oracle</small></button>
+        <button type="button" data-id="draft"><b>1. Draft — never emailed</b><small>No request sent</small></button>
+        <button type="button" data-id="nosplit"><b>2. Sent, never split</b><small>16th full personal</small></button>
+        <button type="button" data-id="matrix"><b>3. Split in time, matrix open</b><small>16th does not touch it</small></button>
+        <button type="button" data-id="reject"><b>4. Audit / matrix rejects</b><small>Back to employee</small></button>
+        <button type="button" data-id="nocorrect"><b>5. Rejected, no correction</b><small>16th full personal to Oracle</small></button>
+        <button type="button" data-id="corrected"><b>6. Rejected, corrected in time</b><small>Starts again at Level 1</small></button>
+        <button type="button" data-id="approved"><b>7. Fully approved</b><small>18th posts personal only</small></button>
+        <button type="button" data-id="noemail"><b>8. No employee email</b><small>Not treated as delivered</small></button>
+      </nav>
+      <article class="panel" id="panel"></article>
+    </div>
+  </div>
+
+  <script>
+    var cases = {
+      master: {
+        kicker: "Standard flow",
+        title: "From invoice to Oracle",
+        desc: "This is the intended path when the employee splits on time and the matrix agrees.",
+        nodes: [
+          ["Invoice uploaded", "Excess above package", ""],
+          ["Request emailed", "Employee gets the split form", "go"],
+          ["Employee submits", "Official + personal = excess", "ok"],
+          ["Matrix L1 → L3", "Audit then next levels", ""],
+          ["18th Oracle", "Personal amount only", "ok"]
+        ],
+        facts: [
+          "If there is no excess, no split and no matrix are required.",
+          "Official + personal must equal the exceeded amount.",
+          "Level 1 is Audit (Fawaz, Shameer, Sijo, Ajai, Athira). Level 2 is Thanzil. Level 3 is Henry.",
+          "Oracle posting waits for the 18th batch. It is not sent the moment the last approver clicks Approve.",
+          "If personal is 0 (all official), nothing is sent to Oracle."
+        ]
+      },
+      draft: {
+        kicker: "Case 1",
+        title: "Draft — request never sent",
+        desc: "The bill is uploaded and there is excess, but the employee never received an approval email.",
+        nodes: [
+          ["Invoice in draft", "Admin has not sent the request", "warn"],
+          ["16th job skips it", "Not treated as delivered", ""],
+          ["No Oracle", "Until someone sends the request or handles it", "stop"]
+        ],
+        facts: [
+          "Status stays draft / Send for approval.",
+          "The 15th/16th rule does not apply.",
+          "Admin must send the request from Invoices before the employee clock starts."
+        ]
+      },
+      nosplit: {
+        kicker: "Case 2",
+        title: "Request sent — employee never split",
+        desc: "The email went out. The employee did not submit official / personal amounts by the end of the 15th.",
+        nodes: [
+          ["Email delivered", "pending_approval", "go"],
+          ["No submit by 15th 23:59", "Form still empty", "warn"],
+          ["16th 00:00", "Note: approval not completed. Official 0. Personal = full excess. Form closed.", "stop"],
+          ["18th Oracle", "Full excess posted as Other Deduction", "ok"]
+        ],
+        facts: [
+          "Applies only if approval_sent and an email count exists.",
+          "Does not go back to Audit. The policy already decided the amount.",
+          "The employee link is invalidated after the 16th job."
+        ]
+      },
+      matrix: {
+        kicker: "Case 3",
+        title: "Employee split in time — matrix still working",
+        desc: "They submitted before the 16th. Audit or a later level has not finished.",
+        nodes: [
+          ["Employee submitted", "Split stored", "ok"],
+          ["Pending excess approval", "Waiting on current level", "go"],
+          ["16th job skips it", "They already acted", ""],
+          ["Approve or reject", "Until freeze on the 18th", ""]
+        ],
+        facts: [
+          "The 16th default rule does not overwrite a real submit.",
+          "Approvers can still reject; that opens case 4.",
+          "If still pending at 18th freeze, it is not posted that month as a completed approval."
+        ]
+      },
+      reject: {
+        kicker: "Case 4",
+        title: "Audit or any level rejects the split",
+        desc: "Someone in the matrix rejects. A reason is required. Nothing is deducted yet.",
+        nodes: [
+          ["Reject + reason", "Required", "stop"],
+          ["Matrix request closed", "Status rejected", ""],
+          ["Email to employee", "Previous split + reason + new form link", "go"],
+          ["Waiting confirmation", "Must re-enter official and personal", "warn"]
+        ],
+        facts: [
+          "No Oracle posting at reject time.",
+          "Old official / personal stay on screen as reference only. They are not final.",
+          "The next submit starts again at Level 1, not at the level that rejected.",
+          "The 16th clock still applies to the correction (case 5 or 6)."
+        ]
+      },
+      nocorrect: {
+        kicker: "Case 5",
+        title: "Rejected — no correction before the 16th",
+        desc: "The correction request reached the employee. They did not resubmit by the end of the 15th.",
+        nodes: [
+          ["Reject email sent", "New form available", "go"],
+          ["No new submit by 15th", "Correction missing", "warn"],
+          ["16th 00:00", "Note: rejected split not corrected. Full excess personal. Form closed. Not sent back to Audit.", "stop"],
+          ["18th Oracle", "Full excess posted", "ok"]
+        ],
+        facts: [
+          "Same law as “never split”, because the request did reach them.",
+          "A prior rejected split does not protect them from the 16th rule.",
+          "Drafts that were never emailed are still excluded."
+        ]
+      },
+      corrected: {
+        kicker: "Case 6",
+        title: "Rejected — employee corrects in time",
+        desc: "They open the new form and submit a new split before the end of the 15th.",
+        nodes: [
+          ["New split submitted", "Before 16th 00:00", "ok"],
+          ["Back to Level 1", "Not the rejecting level", "go"],
+          ["16th skips it", "They already corrected", ""],
+          ["Matrix decides again", "Approve → 18th Oracle on new personal. Reject again → case 5 if no time left.", ""]
+        ],
+        facts: [
+          "Reject reason is cleared when they resubmit.",
+          "Official + personal must still equal the excess.",
+          "If rejected again with no time to correct before the 16th, full excess becomes personal."
+        ]
+      },
+      approved: {
+        kicker: "Case 7",
+        title: "Full matrix approval",
+        desc: "Level 1 through Level 3 all approve the current split.",
+        nodes: [
+          ["L1 Audit", "Approve", "ok"],
+          ["L2", "Approve", "ok"],
+          ["L3", "Approve — workflow complete", "ok"],
+          ["18th batch", "If personal > 0 → Oracle Other Deduction. If personal = 0 → no posting.", "go"]
+        ],
+        facts: [
+          "Completion in eBilling is not the same moment as Oracle.",
+          "Oracle uses the approved personal amount, not the original excess, unless the 16th rule already replaced it.",
+          "Payroll report to Sona / Vinod goes with the 18th cut-off."
+        ]
+      },
+      noemail: {
+        kicker: "Case 8",
+        title: "Employee has no email",
+        desc: "Example: a shared SIM / placeholder with no mailbox. The request cannot be delivered.",
+        nodes: [
+          ["No email on master", "Cannot send folder link", "warn"],
+          ["Not treated as delivered", "16th job skips", ""],
+          ["Admin handles", "Send once an email exists, or process manually", "go"]
+        ],
+        facts: [
+          "Pending on screen without sent_at does not start the 15th clock.",
+          "Do not assume Oracle will pick these up automatically."
+        ]
+      }
+    };
+
+    function render(id) {
+      var c = cases[id];
+      if (!c) return;
+      var html = '<p class="kicker">' + c.kicker + '</p>';
+      html += '<h2>' + c.title + '</h2>';
+      html += '<p class="desc">' + c.desc + '</p>';
+      html += '<div class="flow">';
+      c.nodes.forEach(function (n, i) {
+        if (i) html += '<div class="arrow">→</div>';
+        html += '<div class="node ' + (n[2] || '') + '">' + n[0] + '<em>' + n[1] + '</em></div>';
+      });
+      html += '</div><ul class="facts">';
+      c.facts.forEach(function (f) { html += '<li>' + f + '</li>'; });
+      html += '</ul>';
+      document.getElementById("panel").innerHTML = html;
+      document.querySelectorAll(".cases button").forEach(function (b) {
+        b.classList.toggle("active", b.getAttribute("data-id") === id);
+      });
+      history.replaceState(null, "", "#" + id);
+    }
+
+    document.querySelectorAll(".cases button").forEach(function (b) {
+      b.addEventListener("click", function () { render(b.getAttribute("data-id")); });
+    });
+
+    var host = location.hostname;
+    var base = host === "ebilling.neweast.cloud" ? "" : "/ebilling";
+    document.getElementById("backLink").href = base + "/approval-request";
+    var logo = document.querySelector(".brand img");
+    if (logo) logo.src = (base || "") + "/assets/login/logo.png";
+
+    var start = (location.hash || "#master").replace("#", "");
+    render(cases[start] ? start : "master");
+  </script>
+</body>
+</html>

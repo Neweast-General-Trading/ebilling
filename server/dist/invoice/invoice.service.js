@@ -202,11 +202,76 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
                 source: 'pending_registration',
             },
         });
+        try {
+            await this.carryForwardDeferredApprovals(co, simEmployeeId, insert.rows[0].id, parsed.billingMonth);
+        }
+        catch (error) {
+            this.logger.warn(`Carry-forward skipped for invoice ${insert.rows[0].id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
         return {
             invoice: insert.rows[0],
             parsed,
             monthLabel,
         };
+    }
+    async carryForwardDeferredApprovals(co, simEmployeeId, newInvoiceId, newBillingMonth) {
+        const { rows: pending } = await this.db.query(`SELECT ear.id AS request_id,
+              ear.invoice_id,
+              ear.personal_usage,
+              ear.official_usage,
+              ear.employee_remarks,
+              to_char(i.billing_month, 'YYYY-MM') AS month_key,
+              i.invoice_code
+       FROM excess_approval_requests ear
+       INNER JOIN invoices i ON i.id = ear.invoice_id
+       WHERE ear.co = $1
+         AND i.sim_employee_id = $2
+         AND ear.status = 'pending'
+         AND COALESCE(ear.personal_usage, 0) > 0
+         AND i.billing_month < $3::date
+       ORDER BY i.billing_month ASC`, [co, simEmployeeId, newBillingMonth]);
+        if (!pending.length) {
+            return null;
+        }
+        const carriedPersonal = pending.reduce((sum, row) => sum + (Number(row.personal_usage) || 0), 0);
+        const carriedOfficial = pending.reduce((sum, row) => sum + (Number(row.official_usage) || 0), 0);
+        const noteParts = pending.map((row) => `${row.month_key || 'prior'} (${row.invoice_code || ('#' + row.invoice_id)}): personal AED ${Number(row.personal_usage || 0).toFixed(2)}`);
+        const carryNote = `Carried from prior month(s) — pending approval was not processed before the monthly cut-off (freeze from 18th 00:00 Dubai). ${noteParts.join('; ')}. These amounts are added to this invoice for the next approval cycle.`;
+        await this.db.query(`UPDATE invoices
+       SET personal_usage = COALESCE(personal_usage, 0) + $1,
+           official_usage = COALESCE(official_usage, 0) + $2
+       WHERE id = $3`, [carriedPersonal, carriedOfficial, newInvoiceId]);
+        try {
+            await this.db.query(`INSERT INTO monthly_remarks (sim_employee_id, billing_month, employee_remarks, remarks, updated_at)
+         VALUES ($1, $2::date, $3, $3, NOW())
+         ON CONFLICT (sim_employee_id, billing_month) DO UPDATE SET
+           employee_remarks = CASE
+             WHEN monthly_remarks.employee_remarks IS NULL OR TRIM(monthly_remarks.employee_remarks) = '' THEN EXCLUDED.employee_remarks
+             ELSE monthly_remarks.employee_remarks || E'\\n' || EXCLUDED.employee_remarks
+           END,
+           remarks = CASE
+             WHEN monthly_remarks.remarks IS NULL OR TRIM(monthly_remarks.remarks) = '' THEN EXCLUDED.remarks
+             ELSE monthly_remarks.remarks || E'\\n' || EXCLUDED.remarks
+           END,
+           updated_at = NOW()`, [simEmployeeId, newBillingMonth, carryNote]);
+        }
+        catch (error) {
+            this.logger.warn(`Could not write carry-forward remark: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        const requestIds = pending.map((row) => Number(row.request_id));
+        const invoiceIds = pending.map((row) => Number(row.invoice_id));
+        await this.db.query(`UPDATE excess_approval_requests
+       SET status = 'deferred',
+           reject_reason = $2,
+           rejected_by = 'system',
+           rejected_at = NOW(),
+           completed_at = NOW()
+       WHERE id = ANY($1::int[])`, [requestIds, `Deferred to next billing cycle (invoice #${newInvoiceId}). Not processed before monthly cut-off (freeze from 18th 00:00 Dubai).`]);
+        await this.db.query(`UPDATE invoices
+       SET approval_status = 'deferred_to_next_month'
+       WHERE id = ANY($1::int[])`, [invoiceIds]);
+        this.logger.log(`Carried ${pending.length} deferred approval(s) onto invoice ${newInvoiceId}: personal=${carriedPersonal}`);
+        return { carriedPersonal, carriedOfficial, fromRequestIds: requestIds };
     }
     getPublicBaseUrl() {
         const raw = (process.env.EBILLING_PUBLIC_URL ||
@@ -352,8 +417,10 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         return {
             token,
             invoice: gridRow,
-            canSubmit: ['pending_approval', 'waiting_confirmation'].includes(gridRow.approval_status),
+            canSubmit: ['pending_approval', 'waiting_confirmation', 'excess_rejected'].includes(gridRow.approval_status),
             alreadySubmitted: ['ready_for_recovery', 'confirmed_by_user', 'recovery_sent', 'pending_excess_approval'].includes(gridRow.approval_status),
+            rejectReason: gridRow.excess_reject_reason || null,
+            rejectedBy: gridRow.excess_rejected_by || null,
         };
     }
     async submitFolderApproval(token, dto) {
@@ -415,10 +482,14 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
              ELSE recovery_last_error
            END
        WHERE id = $4
-         AND approval_status IN ('pending_approval', 'waiting_confirmation')`, [personalUsage, officialUsage, nextStatus, invoiceId]);
+         AND approval_status IN ('pending_approval', 'waiting_confirmation', 'excess_rejected')`, [personalUsage, officialUsage, nextStatus, invoiceId]);
         if (!updateResult.rowCount) {
             throw new common_1.BadRequestException('This invoice was already approved');
         }
+        await this.ensureInvoiceRejectColumns();
+        await this.db.query(`UPDATE invoices
+       SET excess_reject_reason = NULL, excess_rejected_by = NULL, excess_rejected_at = NULL
+       WHERE id = $1`, [invoiceId]);
         await this.saveEmployeeRemarks(preview.invoice.sim_employee_id, preview.invoice.month, dto.remarks);
         const gridRow = await this.getGridRowByInvoiceId(String(company), invoiceId);
         if (!gridRow) {
@@ -640,6 +711,194 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
             count: Number(row.count),
         }));
     }
+    async getMonthlyControlReport(co, month) {
+        if (!month) {
+            throw new common_1.BadRequestException('month query is required (YYYY-MM)');
+        }
+        const billingMonth = `${month}-01`;
+        const { rows } = await this.db.query(`SELECT
+        i.id AS invoice_id,
+        e.display_name,
+        e.person_number,
+        e.phone_number,
+        e.email,
+        COALESCE(e.total_amount, e.package_value, 0) AS package_total,
+        COALESCE(i.amount_due, 0) AS invoice_total,
+        i.official_usage,
+        i.personal_usage,
+        i.approval_status,
+        i.approval_sent_at,
+        i.approval_submitted_at,
+        COALESCE(i.approval_email_count, 0) AS approval_email_count,
+        i.excess_reject_reason,
+        i.recovery_status,
+        i.recovery_last_error,
+        i.recovery_sent_at,
+        i.invoice_code,
+        r.employee_remarks,
+        r.admin_remarks,
+        r.remarks,
+        ear.status AS matrix_status,
+        ear.current_level AS matrix_level,
+        ear.completed_at AS matrix_completed_at
+       FROM invoices i
+       INNER JOIN sim_employees e ON e.id = i.sim_employee_id
+       LEFT JOIN monthly_remarks r
+         ON r.sim_employee_id = e.id AND r.billing_month = i.billing_month
+       LEFT JOIN LATERAL (
+         SELECT status, current_level, completed_at
+           FROM excess_approval_requests
+          WHERE invoice_id = i.id
+          ORDER BY submitted_at DESC NULLS LAST, id DESC
+          LIMIT 1
+       ) ear ON TRUE
+      WHERE e.co = $1
+        AND i.billing_month = $2::date
+      ORDER BY e.display_name ASC, i.id ASC`, [co, billingMonth]);
+        const mapped = [];
+        for (const row of rows) {
+            const packageTotal = Number(row.package_total) || 0;
+            const invoiceTotal = Number(row.invoice_total) || 0;
+            const exceeded = (0, invoice_billing_util_1.calculateExceededAmount)(invoiceTotal, packageTotal);
+            const personal = row.personal_usage === null || row.personal_usage === undefined ? null : Number(row.personal_usage);
+            const official = row.official_usage === null || row.official_usage === undefined ? null : Number(row.official_usage);
+            const recovery = String(row.recovery_status || '').toLowerCase();
+            const approvalStatus = String(row.approval_status || '');
+            const matrixStatus = row.matrix_status ? String(row.matrix_status) : null;
+            const matrixApproved = matrixStatus === 'approved';
+            const oraclePosted = recovery === 'sent' || approvalStatus === 'recovery_sent';
+            const oracleFailed = recovery === 'failed';
+            const remarks = (0, remarks_util_1.formatCombinedRemarks)(row.employee_remarks, row.admin_remarks, row.remarks);
+            const remarkBlob = `${row.admin_remarks || ''} ${row.remarks || ''} ${remarks || ''}`;
+            const notSubmittedBy15th = /by the 15th/i.test(remarkBlob);
+            let approvalLabel = (0, invoice_billing_util_1.resolveApprovalColumnLabel)({
+                invoice_total: invoiceTotal,
+                package_total: packageTotal,
+                personal_usage: personal,
+                official_usage: official,
+                approval_status: approvalStatus,
+                excess_approval_level: row.matrix_level,
+                excess_reject_reason: row.excess_reject_reason,
+                approval_email_count: row.approval_email_count,
+                approval_submitted_at: row.approval_submitted_at,
+            });
+            let matrixLabel = matrixApproved ? 'Approved' : (matrixStatus || '—');
+            if (notSubmittedBy15th) {
+                approvalLabel = 'Not submitted';
+                matrixLabel = '—';
+            }
+            let oracleLabel = 'Not sent';
+            if (oraclePosted)
+                oracleLabel = 'Sent to Oracle';
+            else if (oracleFailed)
+                oracleLabel = 'Failed — not sent';
+            else if (recovery === 'pending' || recovery === 'processing')
+                oracleLabel = 'Queued / pending';
+            let issue = null;
+            if (notSubmittedBy15th)
+                issue = 'NOT_SUBMITTED';
+            else if (oraclePosted && !matrixApproved && (personal || 0) > 0)
+                issue = 'ORACLE_WITHOUT_MATRIX';
+            else if (oracleFailed)
+                issue = 'ORACLE_FAILED';
+            else if (matrixApproved && (personal || 0) > 0 && !oraclePosted)
+                issue = 'APPROVED_NOT_SENT';
+            if (exceeded <= 0 && !(personal > 0) && !oraclePosted && !oracleFailed)
+                continue;
+            mapped.push({
+                invoiceId: row.invoice_id,
+                month,
+                monthLabel: (0, invoice_billing_util_1.formatBillingMonthLabel)(month),
+                employee: row.display_name || '—',
+                personNumber: row.person_number || '—',
+                phone: row.phone_number || '—',
+                email: row.email || null,
+                invoiceCode: row.invoice_code || null,
+                excess: exceeded,
+                officialUsage: official,
+                personalUsage: personal,
+                approvalStatus,
+                approvalLabel,
+                matrixStatus: matrixLabel,
+                matrixLevel: row.matrix_level === null || row.matrix_level === undefined ? null : Number(row.matrix_level),
+                matrixApproved: notSubmittedBy15th ? false : matrixApproved,
+                notSubmittedBy15th,
+                inPayrollReport: !notSubmittedBy15th && matrixApproved && (personal || 0) > 0,
+                deduction: personal || 0,
+                oraclePosted,
+                oracleFailed,
+                oracleLabel,
+                oracleError: row.recovery_last_error || null,
+                recoveryStatus: row.recovery_status || null,
+                recoverySentAt: row.recovery_sent_at ? String(row.recovery_sent_at) : null,
+                remarks: remarks || null,
+                issue,
+            });
+        }
+        mapped.sort((a, b) => {
+            const rank = (row) => row.issue === 'ORACLE_WITHOUT_MATRIX' ? 0 : row.issue === 'NOT_SUBMITTED' ? 1 : row.issue === 'ORACLE_FAILED' ? 2 : row.issue === 'APPROVED_NOT_SENT' ? 3 : 4;
+            const d = rank(a) - rank(b);
+            if (d)
+                return d;
+            return String(a.employee).localeCompare(String(b.employee));
+        });
+        return {
+            co,
+            month,
+            monthLabel: (0, invoice_billing_util_1.formatBillingMonthLabel)(month),
+            totals: {
+                rows: mapped.length,
+                oracleWithoutMatrix: mapped.filter((r) => r.issue === 'ORACLE_WITHOUT_MATRIX').length,
+                oracleFailed: mapped.filter((r) => r.issue === 'ORACLE_FAILED').length,
+                approvedNotSent: mapped.filter((r) => r.issue === 'APPROVED_NOT_SENT').length,
+                sentToOracle: mapped.filter((r) => r.oraclePosted).length,
+                inPayrollReport: mapped.filter((r) => r.inPayrollReport).length,
+            },
+            rows: mapped,
+        };
+    }
+    async exportMonthlyControlExcel(co, month) {
+        const report = await this.getMonthlyControlReport(co, month);
+        const XLSX = require('xlsx');
+        const monthLabel = report.monthLabel || report.month || '';
+        const rows = (report.rows || []).map((r) => ({
+            Month: r.monthLabel || r.month || monthLabel,
+            Employee: r.employee || '',
+            'Person Number': r.personNumber || '',
+            Phone: r.phone || '',
+            Approval: r.approvalLabel || '',
+            Matrix: r.matrixStatus || '',
+            'Official (AED)': r.officialUsage == null ? '' : Number(Number(r.officialUsage).toFixed(2)),
+            'Personal deduction (AED)': r.deduction == null ? '' : Number(Number(r.deduction).toFixed(2)),
+            Oracle: r.oracleLabel || '',
+            'Oracle error': r.oracleError || '',
+            'In payroll file': r.inPayrollReport ? 'Yes' : 'No',
+            Issue: r.issue === 'NOT_SUBMITTED'
+                ? 'Not submitted'
+                : r.issue === 'ORACLE_WITHOUT_MATRIX'
+                    ? 'Oracle without approval'
+                    : r.issue === 'ORACLE_FAILED'
+                        ? 'Oracle failed'
+                        : r.issue === 'APPROVED_NOT_SENT'
+                            ? 'Approved, not sent'
+                            : '',
+            Remarks: r.remarks || '',
+            Invoice: r.invoiceCode || '',
+            Email: r.email || '',
+        }));
+        const workbook = XLSX.utils.book_new();
+        const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: 'No rows for this month.' }]);
+        sheet['!cols'] = [
+            { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 12 },
+            { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 40 }, { wch: 12 },
+            { wch: 24 }, { wch: 50 }, { wch: 18 }, { wch: 28 },
+        ];
+        XLSX.utils.book_append_sheet(workbook, sheet, 'Monthly Report');
+        return {
+            filename: `eBilling-monthly-report-${month}.xlsx`,
+            buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
+        };
+    }
     mapGridRow(row, options = {}) {
         const month = String(row.month_key || '').slice(0, 7);
         const packageTotal = Number(row.package_total) || 0;
@@ -703,6 +962,9 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
                 ? null
                 : Number(row.excess_approval_level),
             excess_approval_request_status: row.excess_approval_request_status ?? null,
+            excess_reject_reason: row.excess_reject_reason ?? null,
+            excess_rejected_by: row.excess_rejected_by ?? null,
+            excess_rejected_at: row.excess_rejected_at ? String(row.excess_rejected_at) : null,
         };
         if (options.includeApprovalToken) {
             mapped.approval_token = row.approval_token ?? null;
@@ -713,6 +975,7 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         if (!month) {
             throw new common_1.BadRequestException('month query is required (YYYY-MM)');
         }
+        await this.ensureInvoiceRejectColumns();
         const billingMonth = `${month}-01`;
         const result = await this.db.query(`SELECT
         i.id AS invoice_id,
@@ -741,6 +1004,9 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         i.recovery_sent_at,
         ear.current_level AS excess_approval_level,
         ear.status AS excess_approval_request_status,
+        i.excess_reject_reason,
+        i.excess_rejected_by,
+        i.excess_rejected_at,
         email_log.sent_at AS email_sent_at,
         email_log.recipient_email AS email_sent_to,
         COALESCE(i.uploaded_by_email, upload_log.actor_email) AS uploaded_by_email,
@@ -826,6 +1092,7 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         return (0, employee_email_util_1.normalizeEmployeeEmail)(email);
     }
     async listPendingApprovals(co, actor, rawUser) {
+        await this.ensureInvoiceRejectColumns();
         const candidateEmails = (0, employee_email_util_1.collectActorEmails)(actor?.email, rawUser);
         if (!candidateEmails.length) {
             return [];
@@ -855,13 +1122,16 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         NULL::text AS email_sent_to,
         i.uploaded_by_email,
         i.uploaded_by_name,
-        i.uploaded_at
+        i.uploaded_at,
+        i.excess_reject_reason,
+        i.excess_rejected_by,
+        i.excess_rejected_at
        FROM invoices i
        INNER JOIN sim_employees e ON e.id = i.sim_employee_id
        LEFT JOIN monthly_remarks r
          ON r.sim_employee_id = e.id AND r.billing_month = i.billing_month
        WHERE e.co = $1
-         AND i.approval_status = 'pending_approval'
+         AND i.approval_status IN ('pending_approval', 'waiting_confirmation', 'excess_rejected')
        ORDER BY i.approval_sent_at DESC NULLS LAST, i.billing_month DESC`, [co]);
         return result.rows
             .filter((row) => (0, employee_email_util_1.actorOwnsEmployeeEmail)(String(row.email || ''), actor?.email, rawUser))
@@ -1055,6 +1325,135 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
         });
         return { row: updatedRow };
     }
+    async submitMonthlyOracleDeductions(co, billingMonthKey) {
+        const monthKey = billingMonthKey || (0, invoice_billing_util_1.previousBillingMonthKey)();
+        const { rows } = await this.db.query(`SELECT i.id
+         FROM invoices i
+         INNER JOIN sim_employees e ON e.id = i.sim_employee_id
+         LEFT JOIN excess_approval_requests ear ON ear.invoice_id = i.id
+        WHERE e.co = $1
+          AND to_char(i.billing_month, 'YYYY-MM') = $2
+          AND COALESCE(i.personal_usage, 0) > 0
+          AND COALESCE(i.recovery_status, '') <> 'sent'
+          AND (
+            ear.status = 'approved'
+            OR i.approval_status IN ('ready_for_recovery', 'recovery_sent')
+          )
+        ORDER BY e.display_name ASC, i.id ASC`, [co, monthKey]);
+        const results = [];
+        for (const row of rows) {
+            const invoiceId = String(row.id);
+            try {
+                const push = await this.tryPushRecoveryFromWorkflow(co, invoiceId, {
+                    email: 'monthly-oracle-batch',
+                    name: 'Monthly Oracle batch',
+                });
+                results.push({
+                    invoiceId,
+                    success: push.success === true,
+                    error: push.success ? null : (push.error || 'Oracle submit failed'),
+                });
+            }
+            catch (error) {
+                results.push({
+                    invoiceId,
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+        this.logger.log(`Monthly Oracle batch for ${co} / ${monthKey}: ${results.filter((r) => r.success).length} sent, ${results.filter((r) => !r.success).length} failed, ${rows.length} total`);
+        return {
+            co,
+            billingMonthKey: monthKey,
+            total: rows.length,
+            sent: results.filter((r) => r.success).length,
+            failed: results.filter((r) => !r.success).length,
+            results,
+        };
+    }
+    async applyUnsplitDeadlineForCompany(co) {
+        const neverSplitNote = 'Approval not completed by the employee by the 15th. Full excess charged as personal deduction.';
+        const noCorrectionNote = 'Rejected split was not corrected by the employee by the 15th. Full excess charged as personal deduction.';
+        const { rows } = await this.db.query(`SELECT i.id,
+        i.sim_employee_id,
+        to_char(i.billing_month, 'YYYY-MM') AS month_key,
+        COALESCE(i.amount_due, 0) AS invoice_total,
+        COALESCE(e.total_amount, e.package_value, 0) AS package_total,
+        e.phone_number,
+        e.display_name,
+        i.phone_number AS invoice_phone,
+        COALESCE(i.excess_reject_reason, '') AS excess_reject_reason
+       FROM invoices i
+       INNER JOIN sim_employees e ON e.id = i.sim_employee_id
+      WHERE e.co = $1
+        AND i.approval_status IN ('pending_approval', 'waiting_confirmation')
+        AND i.approval_sent_at IS NOT NULL
+        AND COALESCE(i.approval_email_count, 0) > 0
+        AND (
+          i.approval_submitted_at IS NULL
+          OR COALESCE(i.excess_reject_reason, '') <> ''
+        )
+      ORDER BY i.id ASC`, [co]);
+        const processed = [];
+        for (const row of rows) {
+            const exceeded = (0, invoice_billing_util_1.calculateExceededAmount)(Number(row.invoice_total) || 0, Number(row.package_total) || 0);
+            if (exceeded <= 0)
+                continue;
+            const needsCorrection = String(row.excess_reject_reason || '').trim() !== '';
+            const note = needsCorrection ? noCorrectionNote : neverSplitNote;
+            const nextStatus = 'ready_for_recovery';
+            const updated = await this.db.query(`UPDATE invoices
+         SET personal_usage = $1,
+             official_usage = 0,
+             approval_status = $2::varchar,
+             approval_submitted_at = NOW(),
+             approval_token = NULL,
+             approval_token_expires_at = NULL,
+             recovery_status = 'pending'
+         WHERE id = $3
+           AND approval_status IN ('pending_approval', 'waiting_confirmation')`, [exceeded, nextStatus, row.id]);
+            if (!updated.rowCount)
+                continue;
+            await this.appendSystemRemark(row.sim_employee_id, String(row.month_key), note);
+            await this.auditLog.log({
+                co,
+                actorEmail: 'system',
+                actorName: '15th unsplit deadline',
+                action: 'invoice.unsplit_deadline_full_personal',
+                entityType: 'invoice',
+                entityId: row.id,
+                summary: `${needsCorrection ? 'No correction after reject' : 'No employee split'} by 15th — full excess AED ${exceeded.toFixed(2)} set as personal for ${row.display_name || row.phone_number || row.invoice_phone}`,
+                details: { exceeded, nextStatus, note, needsCorrection },
+            });
+            processed.push({
+                invoiceId: row.id,
+                employee: row.display_name || row.phone_number,
+                personal: exceeded,
+                status: nextStatus,
+                reason: needsCorrection ? 'no_correction_after_reject' : 'never_split',
+            });
+        }
+        this.logger.log(`Unsplit 15th deadline for ${co}: ${processed.length} invoice(s) set to full personal`);
+        return { co, processed: processed.length, matrixSent: 0, rows: processed };
+    }
+    async appendSystemRemark(simEmployeeId, month, remark) {
+        const text = String(remark || '').trim();
+        if (!text)
+            return;
+        await this.db.query(`INSERT INTO monthly_remarks (sim_employee_id, billing_month, admin_remarks, remarks, updated_at)
+       VALUES ($1, $2::date, $3, $3, NOW())
+       ON CONFLICT (sim_employee_id, billing_month) DO UPDATE SET
+         admin_remarks = CASE
+           WHEN monthly_remarks.admin_remarks IS NULL OR TRIM(monthly_remarks.admin_remarks) = '' THEN EXCLUDED.admin_remarks
+           ELSE monthly_remarks.admin_remarks || E'\\n' || EXCLUDED.admin_remarks
+         END,
+         remarks = CASE
+           WHEN monthly_remarks.remarks IS NULL OR TRIM(monthly_remarks.remarks) = '' THEN EXCLUDED.remarks
+           ELSE monthly_remarks.remarks || E'\\n' || EXCLUDED.remarks
+         END,
+         updated_at = NOW()`, [simEmployeeId, `${month}-01`, text]);
+    }
     async sendApprovalReminder(co, invoiceId, actor) {
         this.assertCanSendApprovalEmails(actor);
         const existing = await this.db.query(`SELECT i.*, e.co, e.email, e.display_name,
@@ -1160,7 +1559,8 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
             throw new common_1.BadRequestException('You are not authorized to approve this invoice');
         }
         if (row.approval_status !== 'pending_approval' &&
-            row.approval_status !== 'waiting_confirmation') {
+            row.approval_status !== 'waiting_confirmation' &&
+            row.approval_status !== 'excess_rejected') {
             throw new common_1.BadRequestException('This invoice is not waiting for your approval');
         }
         const invoiceTotal = Number(row.amount_due) || 0;
@@ -1189,7 +1589,7 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
              ELSE recovery_last_error
            END
        WHERE id = $4
-         AND approval_status IN ('pending_approval', 'waiting_confirmation')`, [personalUsage, officialUsage, approvalStatus, invoiceId]);
+         AND approval_status IN ('pending_approval', 'waiting_confirmation', 'excess_rejected')`, [personalUsage, officialUsage, approvalStatus, invoiceId]);
         if (!updateResult.rowCount) {
             throw new common_1.BadRequestException('This invoice was already approved');
         }
@@ -1972,6 +2372,53 @@ let InvoiceService = InvoiceService_1 = class InvoiceService {
             },
         });
         return result;
+    }
+    async ensureInvoiceRejectColumns() {
+        if (this._rejectColumnsReady)
+            return;
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_reject_reason TEXT`);
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_rejected_by VARCHAR(255)`);
+        await this.db.query(`ALTER TABLE invoices_data ADD COLUMN IF NOT EXISTS excess_rejected_at TIMESTAMPTZ`);
+        await this.db.query(`CREATE OR REPLACE VIEW invoices AS
+        SELECT invoices_data.id,
+          invoices_data.sim_employee_id,
+          invoices_data.phone_number,
+          invoices_data.package_value,
+          invoices_data.overage_amount,
+          invoices_data.amount_due,
+          invoices_data.billing_month,
+          invoices_data.pdf_filename,
+          invoices_data.pdf_storage_path,
+          invoices_data.raw_extracted,
+          invoices_data.created_at,
+          invoices_data.personal_usage,
+          invoices_data.due_date,
+          invoices_data.parser_source,
+          invoices_data.invoice_code,
+          invoices_data.calls_parsed_at,
+          invoices_data.call_count,
+          invoices_data.uploaded_by_email,
+          invoices_data.uploaded_by_name,
+          invoices_data.uploaded_at,
+          invoices_data.official_usage,
+          invoices_data.approval_status,
+          invoices_data.approval_sent_at,
+          invoices_data.approval_submitted_at,
+          invoices_data.recovery_sent_at,
+          invoices_data.oracle_recovery_ref,
+          invoices_data.recovery_status,
+          invoices_data.recovery_last_error,
+          invoices_data.recovery_last_attempt_at,
+          invoices_data.approval_token,
+          invoices_data.approval_email_count,
+          invoices_data.approval_token_expires_at,
+          invoices_data.hidden,
+          invoices_data.excess_reject_reason,
+          invoices_data.excess_rejected_by,
+          invoices_data.excess_rejected_at
+         FROM invoices_data
+        WHERE invoices_data.hidden = false`);
+        this._rejectColumnsReady = true;
     }
     async sendSingleEmail(co, simEmployeeId, month, actor) {
         const grid = await this.getGridByMonth(co, month);

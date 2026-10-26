@@ -201,6 +201,14 @@
               <div class="row"><span>Invoice total</span><strong>${money(inv.invoice_total)}</strong></div>
               <div class="row"><span>Amount above package</span><strong style="color:#dc2626">${money(exceeded)}</strong></div>
             </div>
+            ${data.rejectReason ? `
+              <div class="alert">
+                <strong>Your previous split was rejected.</strong><br/>
+                Reason: ${String(data.rejectReason).replace(/</g, '&lt;')}<br/>
+                ${data.rejectedBy ? 'Rejected by: ' + String(data.rejectedBy).replace(/</g, '&lt;') + '<br/>' : ''}
+                Please enter official and personal amounts that add up to <strong>${money(exceeded)}</strong>.
+              </div>
+            ` : ''}
             ${data.alreadySubmitted ? `
               <div class="alert" style="background:#ecfdf5;border-color:#16a34a;color:#166534;">
                 This bill was already approved.
@@ -232,11 +240,11 @@
               <form id="approvalForm" class="fields">
                 <div>
                   <label for="official">Official amount (AED)</label>
-                  <input id="official" name="official" type="number" min="0" step="0.01" value="${exceeded.toFixed(2)}" ${canSubmit ? '' : 'disabled'} />
+                  <input id="official" name="official" type="number" min="0" step="0.01" value="${(inv.official_usage != null ? Number(inv.official_usage) : exceeded).toFixed(2)}" ${canSubmit ? '' : 'disabled'} />
                 </div>
                 <div>
                   <label for="personal">Personal amount (AED)</label>
-                  <input id="personal" name="personal" type="number" min="0" step="0.01" value="0.00" ${canSubmit ? '' : 'disabled'} />
+                  <input id="personal" name="personal" type="number" min="0" step="0.01" value="${(inv.personal_usage != null ? Number(inv.personal_usage) : 0).toFixed(2)}" ${canSubmit ? '' : 'disabled'} />
                   <div class="hint">Official + Personal must equal ${money(exceeded)}</div>
                 </div>
                 <div>

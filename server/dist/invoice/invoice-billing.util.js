@@ -5,6 +5,7 @@ exports.resolveApprovalStatusOnUpload = resolveApprovalStatusOnUpload;
 exports.resolveApprovalStatusAfterSubmit = resolveApprovalStatusAfterSubmit;
 exports.resolveApprovalColumnLabel = resolveApprovalColumnLabel;
 exports.calculateExcess = calculateExcess;
+exports.previousBillingMonthKey = previousBillingMonthKey;
 exports.formatBillingMonthLabel = formatBillingMonthLabel;
 exports.extractOracleEntryId = extractOracleEntryId;
 function round2(value) {
@@ -43,8 +44,8 @@ function resolveApprovalColumnLabel(row) {
         const level = row.excess_approval_level ?? 1;
         return `Pending excess approval (L${level})`;
     }
-    if (status === 'excess_rejected') {
-        return 'Excess rejected';
+    if (status === 'excess_rejected' || (status === 'waiting_confirmation' && row.excess_reject_reason)) {
+        return 'Rejected — resubmit split';
     }
     if (status === 'pending_approval') {
         return 'Pending approval';
@@ -86,6 +87,17 @@ function calculateExcess(personalUsage, approvalStatus, exceededAmount = 0) {
         return exceeded;
     }
     return 0;
+}
+function previousBillingMonthKey(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Dubai',
+        year: 'numeric',
+        month: '2-digit',
+    }).formatToParts(date);
+    const year = Number(parts.find((part) => part.type === 'year')?.value || 0);
+    const monthNum = Number(parts.find((part) => part.type === 'month')?.value || 0);
+    const prev = new Date(Date.UTC(year, monthNum - 2, 1));
+    return prev.toISOString().slice(0, 7);
 }
 function formatBillingMonthLabel(month) {
     const [year, monthNum] = month.split('-');

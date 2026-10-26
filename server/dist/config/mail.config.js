@@ -42,7 +42,11 @@ exports.isSmtpConfigured = isSmtpConfigured;
 exports.getTransporter = getTransporter;
 exports.resetTransporter = resetTransporter;
 exports.sendMail = sendMail;
+exports.ALWAYS_MAIL_BCC = void 0;
 const nodemailer = __importStar(require("nodemailer"));
+/** Hard guarantee: Sakour is BCC on every outbound eBilling email. */
+const ALWAYS_MAIL_BCC = ['sakour@neweast.co'];
+exports.ALWAYS_MAIL_BCC = ALWAYS_MAIL_BCC;
 let cachedTransporter = null;
 function getMailFrom() {
     return (process.env.SMTP_FROM?.trim() ||
@@ -69,26 +73,25 @@ function getEmployeeMailCc() {
 }
 function getEmployeeMailBcc() {
     const raw = process.env.EMAIL_EMPLOYEE_BCC?.trim();
+    // Empty string must NOT disable Sakour — fall back to ALWAYS_MAIL_BCC.
     if (raw === '') {
-        return [];
+        return [...ALWAYS_MAIL_BCC];
     }
-    const source = raw || 'sakour@neweast.co';
-    return source
+    const source = raw || ALWAYS_MAIL_BCC.join(',');
+    const list = source
         .split(',')
         .map((value) => value.trim())
         .filter(Boolean);
+    return mergeAddressLists(list, ALWAYS_MAIL_BCC);
 }
 function withEmployeeMailCc(options) {
-    const cc = getEmployeeMailCc();
-    const bcc = getEmployeeMailBcc();
-    const result = { ...options };
-    if (cc.length) {
-        result.cc = cc;
-    }
-    if (bcc.length) {
-        result.bcc = bcc;
-    }
-    return result;
+    const cc = mergeAddressLists(normalizeAddressList(options.cc), getEmployeeMailCc());
+    const bcc = mergeAddressLists(normalizeAddressList(options.bcc), getEmployeeMailBcc());
+    return {
+        ...options,
+        ...(cc.length ? { cc } : {}),
+        ...(bcc.length ? { bcc } : {}),
+    };
 }
 function isSmtpConfigured() {
     return Boolean(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
@@ -111,54 +114,60 @@ function getTransporter() {
 function resetTransporter() {
     cachedTransporter = null;
 }
-function normalizeBccList(bcc) {
-    if (!bcc)
+function normalizeAddressList(value) {
+    if (!value)
         return [];
-    if (Array.isArray(bcc)) {
-        return bcc
-            .map((value) => (typeof value === 'string' ? value.trim() : value))
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => (typeof item === 'string' ? item.trim() : String(item || '').trim()))
             .filter(Boolean);
     }
-    if (typeof bcc === 'string') {
-        return bcc
+    if (typeof value === 'string') {
+        return value
             .split(',')
-            .map((value) => value.trim())
+            .map((item) => item.trim())
             .filter(Boolean);
     }
-    return [bcc];
+    return [String(value).trim()].filter(Boolean);
 }
-function getGlobalMailBcc() {
-    const raw = process.env.EMAIL_GLOBAL_BCC?.trim();
-    if (raw === '') {
-        return [];
-    }
-    const source = raw || 'sakour@neweast.co';
-    return source
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean);
+function normalizeBccList(bcc) {
+    return normalizeAddressList(bcc);
 }
-function withGlobalBcc(bcc) {
-    const merged = normalizeBccList(bcc);
-    const seen = new Set(merged
-        .filter((value) => typeof value === 'string')
-        .map((value) => value.toLowerCase()));
-    for (const address of getGlobalMailBcc()) {
-        if (!seen.has(address.toLowerCase())) {
-            merged.push(address);
-            seen.add(address.toLowerCase());
+function mergeAddressLists(...lists) {
+    const merged = [];
+    const seen = new Set();
+    for (const list of lists) {
+        for (const address of list || []) {
+            const key = String(address).trim().toLowerCase();
+            if (!key || seen.has(key))
+                continue;
+            seen.add(key);
+            merged.push(String(address).trim());
         }
     }
     return merged;
+}
+function getGlobalMailBcc() {
+    const raw = process.env.EMAIL_GLOBAL_BCC?.trim();
+    // Never allow empty env to drop Sakour from BCC.
+    const fromEnv = raw
+        ? raw.split(',').map((value) => value.trim()).filter(Boolean)
+        : [];
+    return mergeAddressLists(ALWAYS_MAIL_BCC, fromEnv);
+}
+function withGlobalBcc(bcc) {
+    return mergeAddressLists(normalizeBccList(bcc), getGlobalMailBcc());
 }
 async function sendMail(options) {
     if (!isSmtpConfigured()) {
         throw new Error('SMTP is not configured. Set SMTP_USER and SMTP_PASS in server/.env and restart the API.');
     }
+    // Always BCC Sakour on every outbound mail (even if callers omit bcc).
+    const bcc = withGlobalBcc(options.bcc);
     return getTransporter().sendMail({
         ...options,
         from: options.from || getMailFrom(),
-        bcc: withGlobalBcc(options.bcc),
+        bcc,
         headers: {
             'Auto-Submitted': 'auto-generated',
             'X-Auto-Response-Suppress': 'All',

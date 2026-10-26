@@ -4,6 +4,7 @@ exports.buildExcessApproverNotificationEmail = buildExcessApproverNotificationEm
 exports.buildExcessApprovedFinanceEmail = buildExcessApprovedFinanceEmail;
 exports.buildExcessCompletedApproversEmail = buildExcessCompletedApproversEmail;
 exports.buildExcessOracleManualRequiredEmail = buildExcessOracleManualRequiredEmail;
+exports.buildExcessRejectedResplitEmail = buildExcessRejectedResplitEmail;
 function money(value) {
     return `AED ${Number(value || 0).toFixed(2)}`;
 }
@@ -30,12 +31,22 @@ function formatApproverDate(value) {
     });
 }
 function buildExcessApproverNotificationEmail(params) {
-    const { approverName, levelOrder, totalLevels, pendingCount, approvalUrl, newRequestsCount, co, } = params;
+    const { approverName, levelOrder, totalLevels, pendingCount, approvalUrl, newRequestsCount, co, approverEmails, sharedRecipients, } = params;
     const batchLine = newRequestsCount && newRequestsCount > 1
         ? `<p style="margin:0 0 12px;padding:12px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:14px"><strong>${newRequestsCount} new request(s)</strong> were submitted together in one batch.</p>`
         : newRequestsCount === 1
             ? `<p style="margin:0 0 12px;padding:12px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:14px"><strong>1 new request</strong> is waiting for your review.</p>`
             : '';
+    const recipientList = Array.isArray(approverEmails) ? approverEmails.filter(Boolean) : [];
+    const sharedNote = sharedRecipients && recipientList.length > 1
+        ? `<p style="margin:0 0 12px;padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:13px;color:#14532d">
+        This is <strong>one shared email</strong> sent to all <strong>Level ${levelOrder}</strong> approvers together:<br>
+        ${recipientList.map((email) => escapeHtml(email)).join(' · ')}
+      </p>`
+        : '';
+    const greeting = sharedRecipients && recipientList.length > 1
+        ? `Dear Level ${levelOrder} approvers,`
+        : `Dear ${escapeHtml(approverName)},`;
     const safeUrl = escapeHtml(approvalUrl);
     const subject = `eBilling — ${pendingCount} excess approval request(s) — Level ${levelOrder} of ${totalLevels}`;
     const html = `<!DOCTYPE html>
@@ -46,9 +57,10 @@ function buildExcessApproverNotificationEmail(params) {
       <p style="margin:8px 0 0;font-size:14px;opacity:0.95">Level ${levelOrder} of ${totalLevels}${co ? ` · ${escapeHtml(co)}` : ''}</p>
     </div>
     <div style="padding:24px">
-      <p style="margin:0 0 16px">Dear ${escapeHtml(approverName)},</p>
+      <p style="margin:0 0 16px">${greeting}</p>
+      ${sharedNote}
       ${batchLine}
-      <p style="margin:0 0 16px">You have <strong>${pendingCount}</strong> excess invoice request(s) waiting for your approval at <strong>Level ${levelOrder}</strong>.</p>
+      <p style="margin:0 0 16px"><strong>${pendingCount}</strong> excess invoice request(s) are waiting for approval at <strong>Level ${levelOrder}</strong>.</p>
       <p style="margin:0 0 20px;text-align:center">
         <a href="${safeUrl}" style="display:inline-block;background:#0284c7;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px">Open approval request</a>
       </p>
@@ -56,7 +68,7 @@ function buildExcessApproverNotificationEmail(params) {
         <p style="margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b">Request link</p>
         <p style="margin:0;font-size:13px;word-break:break-all"><a href="${safeUrl}" style="color:#0369a1;text-decoration:underline">${safeUrl}</a></p>
       </div>
-      <p style="margin:0;font-size:12px;color:#64748b">Use the button above to open eBilling. Review all pending rows on the approval page, then approve or reject each request.</p>
+      <p style="margin:0;font-size:12px;color:#64748b">Open the link, sign in with your New East account if prompted, review pending rows, then approve or reject. Any Level ${levelOrder} approver can action the queue.</p>
     </div>
     <div style="padding:16px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b">
       Thank you.
@@ -105,7 +117,9 @@ function buildExcessCompletedApproversEmail(params) {
       <p style="margin:8px 0 0;font-size:14px;opacity:0.9">Request #${requestId} — all approval levels are complete.</p>
     </div>
     <div style="padding:24px">
-      <p style="margin:0 0 16px">The personal excess amount has been sent to <strong>Oracle recovery</strong>.</p>
+      <p style="margin:0 0 16px">${oracleEntryId
+        ? 'The personal excess amount has been posted to <strong>Oracle Other Deduction</strong>.'
+        : 'The request is <strong>fully approved</strong>. Oracle Other Deduction will be submitted in the <strong>monthly cut-off batch</strong> (after day 17 closes / 18th 00:00 Dubai).'}</p>
       <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
         <tr>
           <td style="padding:10px 0;color:#64748b;width:38%">Invoice</td>
@@ -203,6 +217,42 @@ function buildExcessOracleManualRequiredEmail(params) {
         The approval workflow in eBilling is already complete. Only the Oracle Other Deduction step needs manual correction.
       </p>
       <p style="margin:16px 0 0">Thank you.</p>
+    </div>
+  </div>
+</body></html>`;
+    return { subject, html };
+}
+function buildExcessRejectedResplitEmail(params) {
+    const { employeeName, monthLabel, invoiceCode, exceededAmount, officialUsage, personalUsage, rejectReason, rejectedBy, splitUrl, } = params;
+    const subject = `eBilling — Excess split rejected — please resubmit (${monthLabel || invoiceCode || 'bill'})`;
+    const html = `<!DOCTYPE html>
+<html><body style="margin:0;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;line-height:1.55;background:#f8fafc">
+  <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #fecaca;border-radius:12px;overflow:hidden">
+    <div style="background:#b91c1c;color:#ffffff;padding:20px 24px">
+      <h1 style="margin:0;font-size:22px;font-weight:700">Your excess split was rejected</h1>
+      <p style="margin:8px 0 0;font-size:14px;opacity:0.95">${escapeHtml(monthLabel || '')}${invoiceCode ? ` · ${escapeHtml(invoiceCode)}` : ''}</p>
+    </div>
+    <div style="padding:24px">
+      <p style="margin:0 0 16px">Dear ${escapeHtml(employeeName || 'Colleague')},</p>
+      <p style="margin:0 0 16px">
+        The official / personal split you submitted was <strong>rejected</strong> by the approval matrix.
+        Please open the form again and enter values that add up to the exceeded amount.
+      </p>
+      <p style="margin:0 0 16px;padding:12px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#7f1d1d">
+        <strong>Reason:</strong> ${escapeHtml(rejectReason || 'No reason provided.')}
+      </p>
+      <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse;font-size:14px;width:100%;margin:0 0 20px">
+        <tr><td><strong>Invoice</strong></td><td>${escapeHtml(invoiceCode || '—')}</td></tr>
+        <tr><td><strong>Exceeded amount</strong></td><td><strong>${money(exceededAmount)}</strong></td></tr>
+        <tr><td><strong>Previous official</strong></td><td>${money(officialUsage)}</td></tr>
+        <tr><td><strong>Previous personal</strong></td><td>${money(personalUsage)}</td></tr>
+        <tr><td><strong>Rejected by</strong></td><td>${escapeHtml(rejectedBy || '—')}</td></tr>
+      </table>
+      <p style="margin:0 0 20px;text-align:center">
+        <a href="${escapeHtml(splitUrl)}" style="display:inline-block;background:#b91c1c;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px">Open split form again</a>
+      </p>
+      <p style="margin:0;font-size:13px;color:#64748b;word-break:break-all">Link: <a href="${escapeHtml(splitUrl)}" style="color:#0369a1">${escapeHtml(splitUrl)}</a></p>
+      <p style="margin:16px 0 0;font-size:13px;color:#64748b">Official + Personal must equal the exceeded amount. After you resubmit, the request returns to Level 1 approval.</p>
     </div>
   </div>
 </body></html>`;
